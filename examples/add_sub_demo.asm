@@ -1,0 +1,5 @@
+; Add/Sub demo
+MOV EAX, 10
+ADD EAX, 5
+SUB EAX, 3
+HLT

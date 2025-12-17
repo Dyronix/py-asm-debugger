@@ -1,0 +1,7 @@
+; Push/Pop demo
+MOV EAX, 0x10
+PUSH EAX
+PUSH 5
+POP EBX
+POP ECX
+HLT
