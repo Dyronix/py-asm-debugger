@@ -10,7 +10,8 @@ A simple x86 (Intel syntax) assembly editor and step debugger built with PyQt6.
 - Instruction cheat sheet generated from the emulator instruction registry.
 - Logging for parse errors, runtime errors, and halt events.
 - Syscall output panel for INT 0x80 write calls.
-- External symbol stubs (e.g., `extern printf`) with simple printf output support.
+- External symbol stubs for common C calls: `printf`/`puts`/`putchar`, `strlen`/`strcmp`, `memcpy`/`memset`, and `malloc`/`free` (plus `operator new/delete` aliases).
+- Separate dock tabs for syscall output and simulated C function output.
 - Symbols dock listing code labels, data labels, globals, and externs.
 - Memory view dock plus basic heap allocator with `malloc`/`free` extern stubs.
 - Fixed memory limit (default 0x20000) with a simple heap range starting at 0x3000.

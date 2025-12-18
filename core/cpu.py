@@ -90,6 +90,13 @@ class CPUState:
             length = max(0, min(length, self.memory_limit - addr))
         return bytes(self.stack_memory.get(clamp_u32(addr + i), 0) & 0xFF for i in range(length))
 
+    def write_bytes(self, addr: int, data: bytes) -> None:
+        if addr < 0 or addr >= self.memory_limit:
+            return
+        max_len = max(0, min(len(data), self.memory_limit - addr))
+        for offset in range(max_len):
+            self.stack_memory[clamp_u32(addr + offset)] = data[offset] & 0xFF
+
     def read_c_string(self, addr: int, max_len: int = 1024) -> str:
         data = bytearray()
         for i in range(max_len):

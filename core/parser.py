@@ -20,6 +20,8 @@ DIRECTIVES = {
     "DB",
     "DW",
     "DD",
+    "STRING",
+    "ASCIZ",
 }
 
 
@@ -31,7 +33,7 @@ class ParseError(Exception):
         self.text = text
 
 
-LABEL_RE = re.compile(r"^([A-Za-z_.][A-Za-z0-9_.]*)\s*:")
+LABEL_RE = re.compile(r"^([A-Za-z_.$@][A-Za-z0-9_.$@]*)\s*:")
 
 
 def _strip_comment(line: str) -> str:
@@ -52,6 +54,9 @@ def _parse_char_literal(raw: str) -> int | None:
 def _parse_operand(token: str) -> Operand:
     raw = token.strip()
     upper = raw.upper()
+    if raw.startswith("<") and raw.endswith(">"):
+        raw = raw[1:-1].strip()
+        upper = raw.upper()
     if not raw:
         return Operand(type="unsupported", value=raw, text=raw)
     size = None
@@ -62,6 +67,15 @@ def _parse_operand(token: str) -> Operand:
         upper = raw.upper()
     if upper in REGISTER_NAMES:
         return Operand(type="reg", value=upper, text=raw, size=size)
+    if upper.startswith("OFFSET"):
+        parts_after = raw.split(None, 1)
+        target = parts_after[1] if len(parts_after) > 1 else ""
+        if target.upper().startswith("FLAT:"):
+            target = target[len("FLAT:") :].strip()
+        return Operand(type="label", value=target.strip(), text=raw, size=size)
+    if upper.startswith("PTR "):
+        raw = raw[4:].strip()
+        upper = raw.upper()
     if raw.startswith("[") and raw.endswith("]"):
         inner = raw[1:-1].strip()
         inner_upper = inner.upper()
@@ -87,9 +101,13 @@ def _parse_operand(token: str) -> Operand:
     char_value = _parse_char_literal(raw)
     if char_value is not None:
         return Operand(type="imm", value=char_value, text=raw, size=size)
+    if (raw.startswith("\"") and raw.endswith("\"")) or (raw.startswith("'") and raw.endswith("'")):
+        inner = raw[1:-1]
+        if inner:
+            return Operand(type="label", value=inner, text=raw, size=size)
     if "(" in raw and ")" in raw:
         return Operand(type="label", value=raw, text=raw, size=size)
-    if re.fullmatch(r"[A-Za-z_.][A-Za-z0-9_.]*", raw):
+    if re.fullmatch(r"[A-Za-z_.$@][A-Za-z0-9_.$@]*", raw):
         return Operand(type="label", value=raw, text=raw, size=size)
     return Operand(type="unsupported", value=raw, text=raw, size=size)
 
@@ -186,13 +204,21 @@ def parse_assembly(text: str) -> Program:
 
         working = line.lstrip()
         upper_working = working.upper()
-        if upper_working.startswith("SECTION") or upper_working.startswith("SEGMENT"):
+        if upper_working.startswith(("SECTION", ".SECTION", "SEGMENT", ".SEGMENT")):
             parts = working.split(None, 1)
             target = parts[1].lower() if len(parts) > 1 else ""
             if "data" in target:
                 section = "data"
+            elif "rodata" in target or "bss" in target:
+                section = "data"
             elif "text" in target or "code" in target:
                 section = "text"
+            continue
+        if upper_working in {".TEXT", "TEXT", ".CODE"}:
+            section = "text"
+            continue
+        if upper_working in {".DATA", "DATA", ".RODATA", "RODATA", ".BSS", "BSS"}:
+            section = "data"
             continue
         while True:
             match = LABEL_RE.match(working)
@@ -217,41 +243,48 @@ def parse_assembly(text: str) -> Program:
         if not parts:
             continue
         mnemonic = parts[0].upper()
-        if mnemonic in {"EXTERN", "GLOBAL"}:
-            if mnemonic == "EXTERN" and len(parts) > 1:
+        stripped_mnemonic = mnemonic[1:] if mnemonic.startswith(".") else mnemonic
+        if stripped_mnemonic in {"EXTERN", "GLOBAL"}:
+            if stripped_mnemonic == "EXTERN" and len(parts) > 1:
                 symbols = _split_args(parts[1])
                 externs.update(sym.upper() for sym in symbols)
-            if mnemonic == "GLOBAL" and len(parts) > 1:
+            if stripped_mnemonic == "GLOBAL" and len(parts) > 1:
                 symbols = _split_args(parts[1])
                 globals_set.update(sym.upper() for sym in symbols)
             continue
 
         if section == "data":
             if len(parts) >= 2 and parts[1]:
-                directive = mnemonic
-                if directive in {"DB", "DW", "DD"}:
-                    size = {"DB": 1, "DW": 2, "DD": 4}[directive]
+                directive = stripped_mnemonic
+                if directive in {"DB", "DW", "DD", "STRING", "ASCIZ"}:
+                    size = {"DB": 1, "DW": 2, "DD": 4}.get(directive, 1)
                     data = _parse_data_bytes(parts[1], size, idx, raw_line)
+                    if directive in {"STRING", "ASCIZ"}:
+                        data += b"\x00"
                     for offset, byte in enumerate(data):
                         data_bytes[data_addr + offset] = byte
                     data_addr += len(data)
                     continue
             tokens = working.split(None, 2)
-            if len(tokens) >= 2 and tokens[1].upper() in {"DB", "DW", "DD"}:
+            token_directive = tokens[1].upper() if len(tokens) >= 2 else ""
+            token_directive = token_directive[1:] if token_directive.startswith(".") else token_directive
+            if len(tokens) >= 2 and token_directive in {"DB", "DW", "DD", "STRING", "ASCIZ"}:
                 label = tokens[0].upper()
                 if label in data_labels:
                     raise ParseError(f"Duplicate data label: {label}", idx, raw_line)
                 data_labels[label] = data_addr
-                directive = tokens[1].upper()
-                size = {"DB": 1, "DW": 2, "DD": 4}[directive]
+                directive = token_directive
+                size = {"DB": 1, "DW": 2, "DD": 4}.get(directive, 1)
                 data_text = tokens[2] if len(tokens) > 2 else ""
                 data = _parse_data_bytes(data_text, size, idx, raw_line)
+                if directive in {"STRING", "ASCIZ"}:
+                    data += b"\x00"
                 for offset, byte in enumerate(data):
                     data_bytes[data_addr + offset] = byte
                 data_addr += len(data)
             continue
 
-        if mnemonic in DIRECTIVES:
+        if stripped_mnemonic in DIRECTIVES:
             continue
         operands: List[Operand] = []
         if len(parts) > 1:

@@ -13,6 +13,7 @@ class StepOutcome:
     halted: bool = False
     error: Optional[EmulationError] = None
     output: Optional[str] = None
+    output_target: Optional[str] = None
 
 
 class Emulator:
@@ -50,10 +51,10 @@ class Emulator:
 
         if result.halt:
             self.halted = True
-            return StepOutcome(halted=True, output=result.output)
+            return StepOutcome(halted=True, output=result.output, output_target=result.output_target)
 
         if result.next_eip is None:
             self.cpu.registers["EIP"] += 1
         else:
             self.cpu.registers["EIP"] = result.next_eip
-        return StepOutcome(output=result.output)
+        return StepOutcome(output=result.output, output_target=result.output_target)

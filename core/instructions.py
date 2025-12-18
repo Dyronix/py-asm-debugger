@@ -13,6 +13,7 @@ class ExecResult:
     next_eip: int | None = None
     halt: bool = False
     output: str | None = None
+    output_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,8 @@ def _value_of(op: Operand, cpu: CPUState, instr: Instruction, program: Program) 
         return cpu.get_reg(str(op.value))
     if op.type == "imm":
         return int(op.value)
+    if op.type == "mem":
+        return _read_mem(op, cpu, instr)
     if op.type == "label":
         name = str(op.value).upper()
         data_addr = program.get_data_label(name)
@@ -163,6 +166,57 @@ def exec_sub(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     return ExecResult()
 
 
+def exec_and(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 2)
+    dest = _require_reg(instr.operands[0], instr)
+    src = _value_of(instr.operands[1], cpu, instr, program)
+    cpu.set_reg(dest, cpu.get_reg(dest) & src)
+    return ExecResult()
+
+
+def exec_or(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 2)
+    dest = _require_reg(instr.operands[0], instr)
+    src = _value_of(instr.operands[1], cpu, instr, program)
+    cpu.set_reg(dest, cpu.get_reg(dest) | src)
+    return ExecResult()
+
+
+def exec_xor(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 2)
+    dest = _require_reg(instr.operands[0], instr)
+    src = _value_of(instr.operands[1], cpu, instr, program)
+    cpu.set_reg(dest, cpu.get_reg(dest) ^ src)
+    return ExecResult()
+
+
+def exec_not(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 1)
+    dest = _require_reg(instr.operands[0], instr)
+    cpu.set_reg(dest, clamp_u32(~cpu.get_reg(dest)))
+    return ExecResult()
+
+
+def _shift(cpu: CPUState, instr: Instruction, program: Program, direction: str) -> ExecResult:
+    _expect_operands(instr, 2)
+    dest = _require_reg(instr.operands[0], instr)
+    amount = _value_of(instr.operands[1], cpu, instr, program) & 0x1F
+    current = cpu.get_reg(dest)
+    if direction == "left":
+        cpu.set_reg(dest, clamp_u32(current << amount))
+    else:
+        cpu.set_reg(dest, clamp_u32(current >> amount))
+    return ExecResult()
+
+
+def exec_shl(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    return _shift(cpu, instr, program, direction="left")
+
+
+def exec_shr(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    return _shift(cpu, instr, program, direction="right")
+
+
 def exec_inc(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     _expect_operands(instr, 1)
     reg = _require_reg(instr.operands[0], instr)
@@ -177,9 +231,29 @@ def exec_dec(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     return ExecResult()
 
 
+def exec_div(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 1)
+    op = instr.operands[0]
+    divisor = _value_of(op, cpu, instr, program)
+    if divisor == 0:
+        raise EmulationError("Division by zero", instr.line_no, instr.text)
+    eax = cpu.get_reg("EAX")
+    edx = cpu.get_reg("EDX")
+    dividend = (edx << 32) | eax
+    quotient = dividend // divisor
+    remainder = dividend % divisor
+    cpu.set_reg("EAX", clamp_u32(quotient))
+    cpu.set_reg("EDX", clamp_u32(remainder))
+    return ExecResult()
+
+
 def exec_push(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     _expect_operands(instr, 1)
-    value = _value_of(instr.operands[0], cpu, instr, program)
+    op = instr.operands[0]
+    if op.type == "mem":
+        value = _read_mem(op, cpu, instr)
+    else:
+        value = _value_of(op, cpu, instr, program)
     cpu.push(value)
     return ExecResult()
 
@@ -233,7 +307,23 @@ def exec_int(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
         data = cpu.read_bytes(buf, length)
         output = data.decode("utf-8", errors="replace")
         cpu.set_reg("EAX", length)
-        return ExecResult(output=output)
+        return ExecResult(output=output, output_target="syscall")
+    if defn.number == 3:
+        length = cpu.get_reg("EDX")
+        buf = cpu.get_reg("ECX")
+        # Simulate read with zero-fill; no actual FD handling.
+        data = bytes([0] * length)
+        cpu.write_bytes(buf, data)
+        cpu.set_reg("EAX", length)
+        return ExecResult()
+    if defn.number == 5:
+        # Simulate open by returning a dummy FD > 2.
+        cpu.set_reg("EAX", 3)
+        return ExecResult()
+    if defn.number == 6:
+        # Simulate close as success.
+        cpu.set_reg("EAX", 0)
+        return ExecResult()
     raise EmulationError(
         f"System call not implemented: {defn.name}",
         instr.line_no,
@@ -296,6 +386,53 @@ def _exec_jcc(cpu: CPUState, instr: Instruction, program: Program, jump_on_zero:
     return ExecResult()
 
 
+def _exec_jle(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 1)
+    op = instr.operands[0]
+    if op.type != "label":
+        raise EmulationError(
+            f"Unsupported operand for {instr.mnemonic}: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    target = program.get_label(str(op.value))
+    if target is None:
+        raise EmulationError(
+            f"Unknown label: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    zf = bool(cpu.flags.get("ZF", 0))
+    sf = bool(cpu.flags.get("SF", 0))
+    of = bool(cpu.flags.get("OF", 0))
+    if zf or (sf != of):
+        return ExecResult(next_eip=target)
+    return ExecResult()
+
+
+def _exec_jge(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 1)
+    op = instr.operands[0]
+    if op.type != "label":
+        raise EmulationError(
+            f"Unsupported operand for {instr.mnemonic}: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    target = program.get_label(str(op.value))
+    if target is None:
+        raise EmulationError(
+            f"Unknown label: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    sf = bool(cpu.flags.get("SF", 0))
+    of = bool(cpu.flags.get("OF", 0))
+    if sf == of:
+        return ExecResult(next_eip=target)
+    return ExecResult()
+
+
 def exec_je(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     return _exec_jcc(cpu, instr, program, jump_on_zero=True)
 
@@ -304,7 +441,7 @@ def exec_jne(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     return _exec_jcc(cpu, instr, program, jump_on_zero=False)
 
 
-def _simulate_printf(cpu: CPUState) -> str:
+def _simulate_printf(cpu: CPUState) -> ExecResult:
     esp = cpu.get_reg("ESP")
     fmt_ptr = cpu.read_mem(esp + 4, 4)
     fmt = cpu.read_c_string(fmt_ptr)
@@ -319,26 +456,161 @@ def _simulate_printf(cpu: CPUState) -> str:
                 output.append("%")
                 i += 2
                 continue
+            raw_arg = cpu.read_mem(esp + 4 + arg_index * 4, 4)
+            arg_index += 1
             if spec in ("d", "i"):
-                raw = cpu.read_mem(esp + 4 + arg_index * 4, 4)
-                value = raw if raw < 0x80000000 else raw - 0x100000000
+                value = raw_arg if raw_arg < 0x80000000 else raw_arg - 0x100000000
                 output.append(str(value))
-                arg_index += 1
+                i += 2
+                continue
+            if spec == "u":
+                output.append(str(raw_arg & 0xFFFFFFFF))
+                i += 2
+                continue
+            if spec in ("x", "X"):
+                hex_value = f"{raw_arg & 0xFFFFFFFF:08x}"
+                output.append(hex_value.upper() if spec == "X" else hex_value)
+                i += 2
+                continue
+            if spec == "p":
+                output.append(f"0x{raw_arg & 0xFFFFFFFF:08x}")
+                i += 2
+                continue
+            if spec == "c":
+                output.append(chr(raw_arg & 0xFF))
                 i += 2
                 continue
             if spec == "s":
-                ptr = cpu.read_mem(esp + 4 + arg_index * 4, 4)
-                output.append(cpu.read_c_string(ptr))
-                arg_index += 1
+                output.append(cpu.read_c_string(raw_arg))
                 i += 2
                 continue
+            output.append("%")
+            output.append(spec)
+            i += 2
+            continue
         output.append(ch)
         i += 1
-    return "".join(output)
+    rendered = "".join(output)
+    cpu.set_reg("EAX", len(rendered))
+    return ExecResult(output=rendered, output_target="extern")
+
+
+def _simulate_puts(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    ptr = cpu.read_mem(esp + 4, 4)
+    text = cpu.read_c_string(ptr)
+    rendered = f"{text}\n"
+    cpu.set_reg("EAX", len(rendered))
+    return ExecResult(output=rendered, output_target="extern")
+
+
+def _simulate_putchar(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    value = cpu.read_mem(esp + 4, 4) & 0xFF
+    cpu.set_reg("EAX", value)
+    return ExecResult(output=chr(value), output_target="extern")
+
+
+def _simulate_strlen(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    ptr = cpu.read_mem(esp + 4, 4)
+    length = len(cpu.read_c_string(ptr))
+    cpu.set_reg("EAX", length)
+    return ExecResult()
+
+
+def _simulate_strcmp(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    left_ptr = cpu.read_mem(esp + 4, 4)
+    right_ptr = cpu.read_mem(esp + 8, 4)
+    left = cpu.read_c_string(left_ptr)
+    right = cpu.read_c_string(right_ptr)
+    result = (left > right) - (left < right)
+    cpu.set_reg("EAX", result)
+    return ExecResult()
+
+
+def _simulate_memcpy(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    dest = cpu.read_mem(esp + 4, 4)
+    src = cpu.read_mem(esp + 8, 4)
+    length = cpu.read_mem(esp + 12, 4)
+    safe_length = max(0, min(length, cpu.memory_limit - max(dest, 0)))
+    data = cpu.read_bytes(src, safe_length)
+    cpu.write_bytes(dest, data)
+    cpu.set_reg("EAX", dest)
+    return ExecResult()
+
+
+def _simulate_memset(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    dest = cpu.read_mem(esp + 4, 4)
+    value = cpu.read_mem(esp + 8, 4) & 0xFF
+    length = cpu.read_mem(esp + 12, 4)
+    safe_length = max(0, min(length, cpu.memory_limit - max(dest, 0)))
+    cpu.write_bytes(dest, bytes([value]) * safe_length)
+    cpu.set_reg("EAX", dest)
+    return ExecResult()
+
+
+def _simulate_malloc(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    size = cpu.read_mem(esp + 4, 4)
+    ptr = cpu.malloc(size)
+    cpu.set_reg("EAX", ptr)
+    return ExecResult()
+
+
+def _simulate_free(cpu: CPUState) -> ExecResult:
+    esp = cpu.get_reg("ESP")
+    ptr = cpu.read_mem(esp + 4, 4)
+    cpu.free(ptr)
+    cpu.set_reg("EAX", 0)
+    return ExecResult()
+
+
+SIMULATED_CALLS: Dict[str, Callable[[CPUState], ExecResult]] = {
+    "PRINTF": _simulate_printf,
+    "PUTS": _simulate_puts,
+    "PUTCHAR": _simulate_putchar,
+    "STRLEN": _simulate_strlen,
+    "STRCMP": _simulate_strcmp,
+    "MEMCPY": _simulate_memcpy,
+    "MEMSET": _simulate_memset,
+    "MALLOC": _simulate_malloc,
+    "OPERATORNEW": _simulate_malloc,
+    "NEW": _simulate_malloc,
+    "FREE": _simulate_free,
+    "OPERATORDELETE": _simulate_free,
+    "DELETE": _simulate_free,
+}
 
 
 def _normalize_symbol(name: str) -> str:
     return "".join(name.split())
+
+
+def _match_simulated_call(symbol_id: str) -> Callable[[CPUState], ExecResult] | None:
+    candidates = [symbol_id, symbol_id.lstrip("_")]
+    for candidate in candidates:
+        for prefix, handler in SIMULATED_CALLS.items():
+            if candidate.startswith(prefix):
+                return handler
+    return None
+
+
+def _extern_matches_symbol(name: str, externs: set[str]) -> bool:
+    normalized_externs = {_normalize_symbol(sym) for sym in externs}
+    normalized_externs |= {_normalize_symbol(sym.lstrip("_")) for sym in externs}
+    candidates = {
+        name,
+        name.split("@", 1)[0],
+        name.lstrip("_"),
+        _normalize_symbol(name),
+        _normalize_symbol(name.split("@", 1)[0]),
+        _normalize_symbol(name.lstrip("_")),
+    }
+    return any(candidate in normalized_externs for candidate in candidates)
 
 
 def exec_call(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
@@ -352,27 +624,22 @@ def exec_call(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult
         )
     name = str(op.value).upper()
     normalized = _normalize_symbol(name)
+    base_name = name.split("@", 1)[0]
+    base_normalized = _normalize_symbol(base_name)
     target = program.get_label(name)
     if target is None:
-        if name in program.externs or any(_normalize_symbol(sym) == normalized for sym in program.externs):
+        extern_match = _extern_matches_symbol(name, program.externs)
+        handler = _match_simulated_call(base_normalized if "@PLT" in name else normalized)
+        if extern_match or "@PLT" in name or handler:
             return_address = cpu.get_reg("EIP") + 1
             cpu.push(return_address)
-            output = None
-            if normalized.startswith("PRINTF"):
-                output = _simulate_printf(cpu)
-                cpu.set_reg("EAX", len(output))
-            elif normalized.startswith("MALLOC") or normalized.startswith("OPERATORNEW") or normalized == "NEW":
-                size = cpu.read_mem(cpu.get_reg("ESP") + 4, 4)
-                ptr = cpu.malloc(size)
-                cpu.set_reg("EAX", ptr)
-            elif normalized.startswith("FREE") or normalized.startswith("OPERATORDELETE") or normalized == "DELETE":
-                ptr = cpu.read_mem(cpu.get_reg("ESP") + 4, 4)
-                cpu.free(ptr)
-                cpu.set_reg("EAX", 0)
-            else:
+            result = handler(cpu) if handler else ExecResult()
+            if handler and result.output and not result.output_target:
+                result.output_target = "extern"
+            if handler is None:
                 cpu.set_reg("EAX", 0)
             cpu.pop()
-            return ExecResult(output=output)
+            return result
         raise EmulationError(
             f"Unknown label: {op.text}",
             instr.line_no,
@@ -385,8 +652,31 @@ def exec_call(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult
 
 def exec_ret(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     _expect_operands(instr, 0)
+    esp = cpu.get_reg("ESP")
+    addresses = [esp + offset for offset in range(4)]
+    if any(clamp_u32(addr) not in cpu.stack_memory for addr in addresses):
+        raise EmulationError(
+            "Missing return address on stack (RET reached via JMP or stack clobbered)",
+            instr.line_no,
+            instr.text,
+        )
     return_address = cpu.pop()
+    if return_address < 0 or return_address >= len(program.instructions):
+        raise EmulationError(
+            f"Invalid return address: 0x{return_address:X} (possible JMP into RET)",
+            instr.line_no,
+            instr.text,
+        )
     return ExecResult(next_eip=return_address)
+
+
+def exec_leave(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 0)
+    ebp = cpu.get_reg("EBP")
+    cpu.set_reg("ESP", ebp)
+    new_ebp = cpu.pop()
+    cpu.set_reg("EBP", new_ebp)
+    return ExecResult()
 
 
 def exec_lea(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
@@ -455,6 +745,66 @@ register_instruction(
 )
 register_instruction(
     InstructionDef(
+        mnemonic="AND",
+        meaning="Bitwise AND",
+        description="Bitwise AND source into destination register.",
+        syntax="AND reg, imm | AND reg, reg",
+        flags="N/A",
+        executor=exec_and,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="OR",
+        meaning="Bitwise OR",
+        description="Bitwise OR source into destination register.",
+        syntax="OR reg, imm | OR reg, reg",
+        flags="N/A",
+        executor=exec_or,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="XOR",
+        meaning="Bitwise XOR",
+        description="Bitwise XOR source into destination register.",
+        syntax="XOR reg, imm | XOR reg, reg",
+        flags="N/A",
+        executor=exec_xor,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="NOT",
+        meaning="Bitwise NOT",
+        description="Invert bits in destination register.",
+        syntax="NOT reg",
+        flags="N/A",
+        executor=exec_not,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="SHL",
+        meaning="Shift Left",
+        description="Logical left shift by immediate or register count.",
+        syntax="SHL reg, imm | SHL reg, reg",
+        flags="N/A",
+        executor=exec_shl,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="SHR",
+        meaning="Shift Right",
+        description="Logical right shift by immediate or register count.",
+        syntax="SHR reg, imm | SHR reg, reg",
+        flags="N/A",
+        executor=exec_shr,
+    )
+)
+register_instruction(
+    InstructionDef(
         mnemonic="INC",
         meaning="Increment",
         description="Increment register by 1.",
@@ -471,6 +821,16 @@ register_instruction(
         syntax="DEC reg",
         flags="N/A",
         executor=exec_dec,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="DIV",
+        meaning="Unsigned Divide",
+        description="Divide EDX:EAX by operand; quotient->EAX, remainder->EDX.",
+        syntax="DIV reg | DIV imm | DIV [reg]",
+        flags="N/A",
+        executor=exec_div,
     )
 )
 register_instruction(
@@ -585,6 +945,46 @@ register_instruction(
 )
 register_instruction(
     InstructionDef(
+        mnemonic="JLE",
+        meaning="Jump Less or Equal",
+        description="Jump if ZF == 1 or SF != OF (signed).",
+        syntax="JLE label",
+        flags="Reads ZF SF OF",
+        executor=_exec_jle,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="JNG",
+        meaning="Jump Not Greater (alias for JLE)",
+        description="Jump if ZF == 1 or SF != OF (signed).",
+        syntax="JNG label",
+        flags="Reads ZF SF OF",
+        executor=_exec_jle,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="JGE",
+        meaning="Jump Greater or Equal",
+        description="Jump if SF == OF (signed).",
+        syntax="JGE label",
+        flags="Reads SF OF",
+        executor=_exec_jge,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="JNL",
+        meaning="Jump Not Less (alias for JGE)",
+        description="Jump if SF == OF (signed).",
+        syntax="JNL label",
+        flags="Reads SF OF",
+        executor=_exec_jge,
+    )
+)
+register_instruction(
+    InstructionDef(
         mnemonic="CALL",
         meaning="Call",
         description="Call a label, pushing return address onto the stack.",
@@ -601,6 +1001,16 @@ register_instruction(
         syntax="RET",
         flags="N/A",
         executor=exec_ret,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="LEAVE",
+        meaning="Leave",
+        description="Restore stack for epilogue (MOV ESP, EBP; POP EBP).",
+        syntax="LEAVE",
+        flags="N/A",
+        executor=exec_leave,
     )
 )
 register_instruction(

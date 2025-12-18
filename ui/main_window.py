@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer
@@ -9,7 +10,10 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
+    QKeySequence,
     QTextCharFormat,
+    QPalette,
+    QShortcut,
     QSyntaxHighlighter,
     QTextCursor,
 )
@@ -23,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QComboBox,
     QSpinBox,
     QStatusBar,
     QTableWidget,
@@ -30,6 +35,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QToolButton,
     QToolBar,
+    QSplitter,
     QVBoxLayout,
     QWidget,
     QTextEdit,
@@ -47,17 +53,21 @@ class AsmHighlighter(QSyntaxHighlighter):
     def __init__(self, parent) -> None:
         super().__init__(parent)
         self.mnemonic_format = QTextCharFormat()
-        self.mnemonic_format.setForeground(QColor("#005f87"))
+        self.mnemonic_format.setForeground(QColor("#ff79c6"))
         self.mnemonic_format.setFontWeight(QFont.Weight.Bold)
 
         self.register_format = QTextCharFormat()
-        self.register_format.setForeground(QColor("#5f005f"))
+        self.register_format.setForeground(QColor("#bd93f9"))
 
         self.number_format = QTextCharFormat()
-        self.number_format.setForeground(QColor("#875f00"))
+        self.number_format.setForeground(QColor("#ffb86c"))
 
         self.comment_format = QTextCharFormat()
-        self.comment_format.setForeground(QColor("#5f875f"))
+        self.comment_format.setForeground(QColor("#6272a4"))
+
+        self.size_format = QTextCharFormat()
+        self.size_format.setForeground(QColor("#8be9fd"))
+        self.size_format.setFontWeight(QFont.Weight.Medium)
 
         self.mnemonics = {d.mnemonic for d in get_instruction_defs()}
         self.registers = {name for name in REGISTER_ORDER}
@@ -82,6 +92,9 @@ class AsmHighlighter(QSyntaxHighlighter):
         tokens = [tok.strip(" ,") for tok in text.replace(",", " ").split()]
         for tok in tokens:
             upper = tok.upper()
+            if upper in {"BYTE", "WORD", "DWORD", "QWORD", "PTR"}:
+                start = text.upper().find(upper)
+                self.setFormat(start, len(tok), self.size_format)
             if upper in self.registers:
                 start = text.upper().find(upper)
                 self.setFormat(start, len(tok), self.register_format)
@@ -100,6 +113,9 @@ class MainWindow(QMainWindow):
         self.source_dirty = True
         self.updating_views = False
         self.run_state = "Ready"
+        self.prev_registers: dict[str, int] = {}
+        self.prev_stack_values: dict[int, int] = {}
+        self.execution_mode = "Freestanding"
 
         self.cpu = CPUState()
         self.program = Program(instructions=[], labels={})
@@ -110,11 +126,42 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.on_timer_step)
 
         self._build_ui()
+        self._setup_shortcuts()
         self._update_views()
         self._update_status()
+        self._load_layout()
+
+    def _resolve_entry_point(self) -> int | None:
+        if self.program.entry_point is not None:
+            return self.program.entry_point
+        if self.execution_mode == "Snippet":
+            return 0
+        return None
+
+    def _setup_shortcuts(self) -> None:
+        self.shortcuts: list[QShortcut] = []
+
+        shortcut_map = [
+            ("F5", self.play),
+            ("F9", self.pause),
+            ("F10", self.step_once),
+            ("Ctrl+Shift+F5", self.reset_state),
+            ("PgUp", lambda: self._adjust_step_rate(1)),
+            ("PgDown", lambda: self._adjust_step_rate(-1)),
+        ]
+        for sequence, handler in shortcut_map:
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(handler)
+            self.shortcuts.append(shortcut)
+
+    def _on_mode_changed(self, index: int) -> None:
+        self.execution_mode = "Snippet" if index == 1 else "Freestanding"
+        self.log(f"Mode set to {self.execution_mode}.")
+        self._update_views()
 
     def _build_ui(self) -> None:
         toolbar = QToolBar("Controls")
+        toolbar.setObjectName("ControlsToolbar")
         self.addToolBar(toolbar)
 
         new_action = QAction("New", self)
@@ -135,82 +182,111 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        toolbar.addSeparator()
-
-        rate_label = QLabel("Steps/s")
-        toolbar.addWidget(rate_label)
-        self.rate_spin = QSpinBox()
-        self.rate_spin.setRange(1, 1000)
-        self.rate_spin.setValue(5)
-        self.rate_spin.valueChanged.connect(self._update_timer_interval)
-        toolbar.addWidget(self.rate_spin)
-
-        central = QWidget()
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self.setCentralWidget(central)
-
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(8, 8, 8, 8)
         left_layout.addWidget(QLabel("Cheat Sheets"))
 
         self.cheat_tabs = QTabWidget()
         self.cheat_tabs.addTab(self._build_instruction_tab(), "Instructions")
         self.cheat_tabs.addTab(self._build_syscall_tab(), "Syscalls")
         left_layout.addWidget(self.cheat_tabs)
-        layout.addWidget(left_panel, 1)
+        left_panel.setMinimumWidth(220)
 
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
-        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setContentsMargins(8, 8, 8, 8)
         center_layout.addWidget(QLabel("Assembly Editor"))
         center_layout.addWidget(self._build_center_controls())
         self.editor = QPlainTextEdit()
-        self.editor.setFont(QFont("Consolas", 11))
+        self.editor.setFont(self._default_font())
         self.editor.textChanged.connect(self.on_text_changed)
         self.highlighter = AsmHighlighter(self.editor.document())
         center_layout.addWidget(self.editor)
-        layout.addWidget(center_panel, 2)
+        center_layout.addLayout(self._build_editor_footer())
 
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-
-        right_layout.addWidget(QLabel("Registers"))
+        register_section = QWidget()
+        register_layout = QVBoxLayout(register_section)
+        register_layout.setContentsMargins(8, 8, 8, 8)
+        register_layout.addWidget(QLabel("Registers"))
         self.register_table = QTableWidget(len(REGISTER_ORDER), 2)
         self.register_table.setHorizontalHeaderLabels(["Register", "Value"])
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.cellChanged.connect(self.on_register_edit)
-        right_layout.addWidget(self.register_table)
+        self.register_table.setFont(self._default_font())
+        register_layout.addWidget(self.register_table)
 
-        right_layout.addWidget(QLabel("Stack"))
+        stack_section = QWidget()
+        stack_layout = QVBoxLayout(stack_section)
+        stack_layout.setContentsMargins(8, 8, 8, 8)
+        stack_layout.addWidget(QLabel("Stack"))
         self.stack_table = QTableWidget(16, 3)
         self.stack_table.setHorizontalHeaderLabels(["Address", "Value", "Markers"])
         self.stack_table.verticalHeader().setVisible(False)
         self.stack_table.cellChanged.connect(self.on_stack_edit)
-        right_layout.addWidget(self.stack_table)
+        self.stack_table.setFont(self._default_font())
+        stack_layout.addWidget(self.stack_table)
 
-        layout.addWidget(right_panel, 1)
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_splitter.setChildrenCollapsible(False)
+        right_splitter.addWidget(register_section)
+        right_splitter.addWidget(stack_section)
+        right_splitter.setStretchFactor(0, 1)
+        right_splitter.setStretchFactor(1, 1)
+        right_splitter.setMinimumWidth(260)
+        self.right_splitter = right_splitter
+
+        central_splitter = QSplitter(Qt.Orientation.Horizontal)
+        central_splitter.setChildrenCollapsible(False)
+        central_splitter.addWidget(left_panel)
+        central_splitter.addWidget(center_panel)
+        central_splitter.addWidget(right_splitter)
+        central_splitter.setStretchFactor(0, 1)
+        central_splitter.setStretchFactor(1, 3)
+        central_splitter.setStretchFactor(2, 1)
+        central_splitter.setSizes([240, 720, 320])
+        self.central_splitter = central_splitter
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(10, 10, 10, 10)
+        container_layout.addWidget(central_splitter)
+        self.setCentralWidget(container)
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
+        self.log_output.setFont(self._default_font())
         log_dock = QDockWidget("Log / Output", self)
+        log_dock.setObjectName("LogDock")
         log_dock.setWidget(self.log_output)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
         self.syscall_output = QPlainTextEdit()
         self.syscall_output.setReadOnly(True)
+        self.syscall_output.setFont(self._default_font())
         syscall_dock = QDockWidget("Syscall Output", self)
+        syscall_dock.setObjectName("SyscallDock")
         syscall_dock.setWidget(self.syscall_output)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, syscall_dock)
+
+        self.extern_output = QPlainTextEdit()
+        self.extern_output.setReadOnly(True)
+        self.extern_output.setFont(self._default_font())
+        extern_dock = QDockWidget("C Function Output", self)
+        extern_dock.setObjectName("ExternDock")
+        extern_dock.setWidget(self.extern_output)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, extern_dock)
+        self.tabifyDockWidget(syscall_dock, extern_dock)
+        syscall_dock.raise_()
 
         self.symbol_table = QTableWidget(0, 3)
         self.symbol_table.setHorizontalHeaderLabels(["Symbol", "Kind", "Address/Info"])
         self.symbol_table.verticalHeader().setVisible(False)
         self.symbol_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.symbol_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.symbol_table.setFont(self._default_font())
         symbol_dock = QDockWidget("Symbols", self)
+        symbol_dock.setObjectName("SymbolsDock")
         symbol_dock.setWidget(self.symbol_table)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, symbol_dock)
 
@@ -228,6 +304,7 @@ class MainWindow(QMainWindow):
         self.memory_table.verticalHeader().setVisible(False)
         self.memory_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.memory_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.memory_table.setFont(self._default_font())
 
         memory_controls = QWidget()
         memory_layout = QHBoxLayout(memory_controls)
@@ -244,21 +321,26 @@ class MainWindow(QMainWindow):
         memory_panel_layout.addWidget(self.memory_table)
 
         memory_dock = QDockWidget("Memory View", self)
+        memory_dock.setObjectName("MemoryDock")
         memory_dock.setWidget(memory_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, memory_dock)
 
         status = QStatusBar()
         self.setStatusBar(status)
+        status.setStyleSheet("QStatusBar { padding: 6px 10px; }")
         self.state_label = QLabel("Ready")
         self.line_label = QLabel("Line: -")
         status.addWidget(self.state_label)
         status.addPermanentWidget(self.line_label)
 
+        self._apply_dracula_theme()
+
     def _build_center_controls(self) -> QWidget:
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self.play_button = QToolButton()
         self.pause_button = QToolButton()
@@ -275,11 +357,95 @@ class MainWindow(QMainWindow):
         self.step_button.clicked.connect(self.step_once)
         self.reset_button.clicked.connect(self.reset_state)
 
+        self.play_button.setToolTip("Play (F5)")
+        self.pause_button.setToolTip("Pause (F9)")
+        self.step_button.setToolTip("Step (F10)")
+        self.reset_button.setToolTip("Reset (Ctrl+Shift+F5)")
+
         layout.addWidget(self.play_button)
         layout.addWidget(self.pause_button)
         layout.addWidget(self.step_button)
         layout.addWidget(self.reset_button)
+
+        layout.addStretch(1)
+        mode_label = QLabel("Mode")
+        layout.addWidget(mode_label)
+        self.mode_select = QComboBox()
+        self.mode_select.addItems(["Freestanding (_start)", "Snippet/Function"])
+        self.mode_select.currentIndexChanged.connect(self._on_mode_changed)
+        layout.addWidget(self.mode_select)
         return widget
+
+    def _build_editor_footer(self) -> QHBoxLayout:
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.addStretch(1)
+        rate_label = QLabel("Steps/s")
+        layout.addWidget(rate_label)
+        self.rate_spin = QSpinBox()
+        self.rate_spin.setRange(1, 1000)
+        self.rate_spin.setValue(5)
+        self.rate_spin.valueChanged.connect(self._update_timer_interval)
+        layout.addWidget(self.rate_spin)
+        return layout
+
+    def _config_path(self) -> str:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, ".asm_debugger_layout.json")
+
+    def _load_layout(self) -> None:
+        path = self._config_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            geo = data.get("geometry")
+            if geo:
+                self.restoreGeometry(bytes.fromhex(geo))
+            state = data.get("state")
+            if state:
+                self.restoreState(bytes.fromhex(state))
+            if "central_sizes" in data and hasattr(self, "central_splitter"):
+                self.central_splitter.setSizes(data.get("central_sizes", []))
+            if "right_sizes" in data and hasattr(self, "right_splitter"):
+                self.right_splitter.setSizes(data.get("right_sizes", []))
+            mode_index = data.get("mode_index")
+            if mode_index is not None:
+                self.mode_select.setCurrentIndex(int(mode_index))
+            rate = data.get("rate")
+            if rate:
+                self.rate_spin.setValue(int(rate))
+            mem_base = data.get("memory_base")
+            if mem_base:
+                self.memory_base.setText(mem_base)
+            mem_rows = data.get("memory_rows")
+            if mem_rows:
+                self.memory_rows.setValue(int(mem_rows))
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+    def _save_layout(self) -> None:
+        data = {}
+        data["geometry"] = self.saveGeometry().toHex().data().decode("ascii")
+        data["state"] = self.saveState().toHex().data().decode("ascii")
+        if hasattr(self, "central_splitter"):
+            data["central_sizes"] = self.central_splitter.sizes()
+        if hasattr(self, "right_splitter"):
+            data["right_sizes"] = self.right_splitter.sizes()
+        data["mode_index"] = self.mode_select.currentIndex()
+        data["rate"] = self.rate_spin.value()
+        data["memory_base"] = self.memory_base.text()
+        data["memory_rows"] = self.memory_rows.value()
+        try:
+            with open(self._config_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._save_layout()
+        super().closeEvent(event)
 
     def _load_icon_font(self) -> tuple[Optional[str], dict[str, str], bool]:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -384,6 +550,80 @@ class MainWindow(QMainWindow):
                     break
             self.syscall_table.setRowHidden(row, not matches if query else False)
 
+    def _default_font(self) -> QFont:
+        preferred = [
+            "JetBrains Mono",
+            "Cascadia Code",
+            "Fira Code",
+            "IBM Plex Mono",
+            "Source Code Pro",
+            "Inconsolata",
+            "DejaVu Sans Mono",
+            "Consolas",
+            "Menlo",
+            "Monaco",
+        ]
+        available = set(QFontDatabase.families())
+        for name in preferred:
+            if name in available:
+                return QFont(name, 11)
+        return QFont("Monospace", 11)
+
+    def _apply_dracula_theme(self) -> None:
+        base_bg = QColor("#282a36")
+        text_fg = QColor("#f8f8f2")
+        highlight_bg = QColor("#44475a")
+        highlight_fg = QColor("#f8f8f2")
+        panel_bg = QColor("#1e1f29")
+        border = QColor("#3c3f58")
+
+        for edit in (self.editor, self.log_output, self.syscall_output, self.extern_output):
+            palette = edit.palette()
+            palette.setColor(QPalette.ColorRole.Base, base_bg)
+            palette.setColor(QPalette.ColorRole.Text, text_fg)
+            palette.setColor(QPalette.ColorRole.Highlight, highlight_bg)
+            palette.setColor(QPalette.ColorRole.HighlightedText, highlight_fg)
+            edit.setPalette(palette)
+            edit.setStyleSheet(f"QPlainTextEdit {{ background-color: {base_bg.name()}; color: {text_fg.name()}; }}")
+
+        selection_style = (
+            "QTableWidget {"
+            f" background-color: {panel_bg.name()};"
+            f" color: {text_fg.name()};"
+            f" gridline-color: {border.name()};"
+            "}"
+            "QHeaderView::section {"
+            f" background-color: {border.name()};"
+            f" color: {text_fg.name()};"
+            " padding: 4px;"
+            "}"
+            "QTableWidget::item:selected {"
+            f" background: {highlight_bg.name()};"
+            f" color: {highlight_fg.name()};"
+            "}"
+        )
+        tables = [
+            self.register_table,
+            self.stack_table,
+            self.symbol_table,
+            self.memory_table,
+            self.cheat_table,
+            self.syscall_table,
+        ]
+        for table in tables:
+            table.setStyleSheet(selection_style)
+
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, panel_bg)
+        palette.setColor(QPalette.ColorRole.Base, base_bg)
+        palette.setColor(QPalette.ColorRole.Text, text_fg)
+        palette.setColor(QPalette.ColorRole.Button, panel_bg)
+        palette.setColor(QPalette.ColorRole.ButtonText, text_fg)
+        palette.setColor(QPalette.ColorRole.WindowText, text_fg)
+        palette.setColor(QPalette.ColorRole.Highlight, highlight_bg)
+        palette.setColor(QPalette.ColorRole.HighlightedText, highlight_fg)
+        self.setPalette(palette)
+
     def _build_instruction_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -400,6 +640,7 @@ class MainWindow(QMainWindow):
         self.cheat_table.verticalHeader().setVisible(False)
         self.cheat_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.cheat_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.cheat_table.setFont(self._default_font())
         layout.addWidget(self.cheat_table)
         self._populate_cheat_sheet()
         return widget
@@ -420,6 +661,7 @@ class MainWindow(QMainWindow):
         self.syscall_table.verticalHeader().setVisible(False)
         self.syscall_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.syscall_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.syscall_table.setFont(self._default_font())
         layout.addWidget(self.syscall_table)
         self._populate_syscall_sheet()
         return widget
@@ -480,9 +722,12 @@ class MainWindow(QMainWindow):
         self.program = program
         self.cpu.reset()
         self.cpu.load_data(self.program.data_bytes)
-        if self.program.entry_point is not None:
-            self.cpu.set_reg("EIP", self.program.entry_point)
+        entry_point = self._resolve_entry_point()
+        if entry_point is not None:
+            self.cpu.set_reg("EIP", entry_point)
         self.emulator = Emulator(self.cpu, self.program)
+        self.prev_registers = {}
+        self.prev_stack_values = {}
         self.source_dirty = False
         self._populate_symbols()
         self.set_state("Ready")
@@ -527,7 +772,10 @@ class MainWindow(QMainWindow):
 
     def handle_step_outcome(self, outcome: StepOutcome) -> None:
         if outcome.output:
-            self.syscall_output.appendPlainText(outcome.output)
+            if outcome.output_target == "extern":
+                self.extern_output.appendPlainText(outcome.output)
+            else:
+                self.syscall_output.appendPlainText(outcome.output)
         if outcome.error:
             self.set_state("Error")
             self.log(f"HALT due to error: {outcome.error.message}")
@@ -542,9 +790,12 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.cpu.reset()
         self.cpu.load_data(self.program.data_bytes)
-        if self.program.entry_point is not None:
-            self.cpu.set_reg("EIP", self.program.entry_point)
+        entry_point = self._resolve_entry_point()
+        if entry_point is not None:
+            self.cpu.set_reg("EIP", entry_point)
         self.emulator = Emulator(self.cpu, self.program)
+        self.prev_registers = {}
+        self.prev_stack_values = {}
         self.set_state("Ready")
         self._update_views()
         self.log("CPU state reset.")
@@ -558,6 +809,10 @@ class MainWindow(QMainWindow):
         steps = self.rate_spin.value()
         interval_ms = max(1, int(1000 / steps))
         self.timer.setInterval(interval_ms)
+
+    def _adjust_step_rate(self, delta: int) -> None:
+        new_value = min(self.rate_spin.maximum(), max(self.rate_spin.minimum(), self.rate_spin.value() + delta))
+        self.rate_spin.setValue(new_value)
 
     def _update_views(self) -> None:
         self.updating_views = True
@@ -579,8 +834,13 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem(f"0x{value:08X}")
             value_item.setData(Qt.ItemDataRole.UserRole, reg)
             value_item.setToolTip(str(value))
+            prev_value = self.prev_registers.get(reg)
+            if prev_value is not None and prev_value != value:
+                value_item.setBackground(QColor("#ffb86c"))
+                value_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
         self.register_table.resizeColumnsToContents()
+        self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_stack_view(self) -> None:
         esp = self.cpu.get_reg("ESP")
@@ -605,11 +865,17 @@ class MainWindow(QMainWindow):
             self.stack_table.setItem(i, 1, value_item)
             self.stack_table.setItem(i, 2, marker_item)
             if addr == esp:
-                highlight = QColor("#ffd6d6")
+                highlight = QColor("#f286c4")
                 addr_item.setBackground(highlight)
                 value_item.setBackground(highlight)
                 marker_item.setBackground(highlight)
+            prev_value = self.prev_stack_values.get(addr)
+            if prev_value is not None and prev_value != value:
+                change_bg = QColor("#ffb86c")
+                value_item.setBackground(change_bg)
+                value_item.setForeground(QColor("#1a1b26"))
         self.stack_table.resizeColumnsToContents()
+        self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
         rows = []

@@ -39,10 +39,37 @@ register_syscall(
 )
 register_syscall(
     SyscallDef(
+        number=3,
+        name="read",
+        description="Read bytes from fd into buffer (simulated zero-fill).",
+        args="EBX=fd, ECX=buf, EDX=len",
+        returns="EAX = bytes read",
+    )
+)
+register_syscall(
+    SyscallDef(
         number=4,
         name="write",
         description="Write bytes to a file descriptor (simulated).",
         args="EBX=fd, ECX=buf, EDX=len",
         returns="EAX = bytes written",
+    )
+)
+register_syscall(
+    SyscallDef(
+        number=5,
+        name="open",
+        description="Open a file path (simulated stub).",
+        args="EBX=pathname, ECX=flags, EDX=mode",
+        returns="EAX = fd (simulated)",
+    )
+)
+register_syscall(
+    SyscallDef(
+        number=6,
+        name="close",
+        description="Close a file descriptor (simulated stub).",
+        args="EBX=fd",
+        returns="EAX = status (0 on success)",
     )
 )
