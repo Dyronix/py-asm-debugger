@@ -29,9 +29,13 @@ class Program:
     globals: Set[str] = field(default_factory=set)
     data_labels: Dict[str, int] = field(default_factory=dict)
     data_bytes: Dict[int, int] = field(default_factory=dict)
+    constants: Dict[str, int] = field(default_factory=dict)
 
     def get_label(self, name: str) -> Optional[int]:
         return self.labels.get(name.upper())
 
     def get_data_label(self, name: str) -> Optional[int]:
         return self.data_labels.get(name.upper())
+
+    def get_constant(self, name: str) -> Optional[int]:
+        return self.constants.get(name.upper())

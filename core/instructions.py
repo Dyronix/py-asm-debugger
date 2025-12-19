@@ -69,9 +69,12 @@ def _value_of(op: Operand, cpu: CPUState, instr: Instruction, program: Program) 
     if op.type == "imm":
         return int(op.value)
     if op.type == "mem":
-        return _read_mem(op, cpu, instr)
+        return _read_mem(op, cpu, instr, program)
     if op.type == "label":
         name = str(op.value).upper()
+        constant_value = program.get_constant(name)
+        if constant_value is not None:
+            return constant_value
         data_addr = program.get_data_label(name)
         if data_addr is not None:
             return data_addr
@@ -90,36 +93,78 @@ def _value_of(op: Operand, cpu: CPUState, instr: Instruction, program: Program) 
     )
 
 
-def _read_mem(op: Operand, cpu: CPUState, instr: Instruction) -> int:
+def _resolve_mem_address(op: Operand, cpu: CPUState, instr: Instruction, program: Program) -> int:
     if op.type != "mem":
         raise EmulationError(
             f"Unsupported operand for {instr.mnemonic}: {op.text}",
             instr.line_no,
             instr.text,
         )
+    offset = 0
+    base = op.value
     if isinstance(op.value, tuple):
         base, offset = op.value
-        addr = clamp_u32(cpu.get_reg(str(base)) + int(offset))
-    else:
-        addr = cpu.get_reg(str(op.value))
+
+    def _base_address(base_val) -> int:
+        if isinstance(base_val, str):
+            upper = base_val.upper()
+            if upper in REGISTERS:
+                return cpu.get_reg(upper)
+            constant_value = program.get_constant(upper)
+            if constant_value is not None:
+                return constant_value
+            data_addr = program.get_data_label(upper)
+            if data_addr is not None:
+                return data_addr
+            code_addr = program.get_label(upper)
+            if code_addr is not None:
+                return code_addr
+            raise EmulationError(f"Unknown label: {base_val}", instr.line_no, instr.text)
+        return int(base_val)
+
+    base_addr = _base_address(base)
+    return clamp_u32(base_addr + int(offset))
+
+
+def _read_mem(op: Operand, cpu: CPUState, instr: Instruction, program: Program) -> int:
+    if op.type != "mem":
+        raise EmulationError(
+            f"Unsupported operand for {instr.mnemonic}: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    addr = _resolve_mem_address(op, cpu, instr, program)
     size = op.size or 4
     return cpu.read_mem(addr, size)
 
 
-def _write_mem(op: Operand, cpu: CPUState, value: int, instr: Instruction) -> None:
+def _write_mem(op: Operand, cpu: CPUState, value: int, instr: Instruction, program: Program) -> None:
     if op.type != "mem":
         raise EmulationError(
             f"Unsupported operand for {instr.mnemonic}: {op.text}",
             instr.line_no,
             instr.text,
         )
-    if isinstance(op.value, tuple):
-        base, offset = op.value
-        addr = clamp_u32(cpu.get_reg(str(base)) + int(offset))
-    else:
-        addr = cpu.get_reg(str(op.value))
+    addr = _resolve_mem_address(op, cpu, instr, program)
     size = op.size or 4
     cpu.write_mem(addr, size, value)
+
+
+def _inc_dec_result(prev: int, size_bytes: int, op: str, cpu: CPUState) -> int:
+    bits = max(8, size_bytes * 8)
+    mask = (1 << bits) - 1
+    sign_bit = 1 << (bits - 1)
+    prev_masked = prev & mask
+    if op == "inc":
+        result = (prev_masked + 1) & mask
+        overflow = prev_masked == (sign_bit - 1)
+    else:
+        result = (prev_masked - 1) & mask
+        overflow = prev_masked == sign_bit
+    cpu.flags["ZF"] = 1 if result == 0 else 0
+    cpu.flags["SF"] = 1 if (result & sign_bit) else 0
+    cpu.flags["OF"] = 1 if overflow else 0
+    return result
 
 
 def exec_mov(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
@@ -128,7 +173,7 @@ def exec_mov(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     src_op = instr.operands[1]
     if dest_op.type == "reg":
         if src_op.type == "mem":
-            cpu.set_reg(str(dest_op.value), _read_mem(src_op, cpu, instr))
+            cpu.set_reg(str(dest_op.value), _read_mem(src_op, cpu, instr, program))
         else:
             cpu.set_reg(str(dest_op.value), _value_of(src_op, cpu, instr, program))
     elif dest_op.type == "mem":
@@ -138,7 +183,7 @@ def exec_mov(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
                 instr.line_no,
                 instr.text,
             )
-        _write_mem(dest_op, cpu, _value_of(src_op, cpu, instr, program), instr)
+        _write_mem(dest_op, cpu, _value_of(src_op, cpu, instr, program), instr, program)
     else:
         raise EmulationError(
             f"Unsupported operand for {instr.mnemonic}: {dest_op.text}",
@@ -219,15 +264,59 @@ def exec_shr(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
 
 def exec_inc(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     _expect_operands(instr, 1)
-    reg = _require_reg(instr.operands[0], instr)
-    cpu.set_reg(reg, cpu.get_reg(reg) + 1)
+    op = instr.operands[0]
+    if op.type == "reg":
+        reg = _require_reg(op, instr)
+        prev = cpu.get_reg(reg)
+        result = _inc_dec_result(prev, 4, "inc", cpu)
+        cpu.set_reg(reg, result)
+    elif op.type == "mem":
+        value = _read_mem(op, cpu, instr, program)
+        result = _inc_dec_result(value, op.size or 4, "inc", cpu)
+        _write_mem(op, cpu, result, instr, program)
+    else:
+        raise EmulationError(
+            f"Unsupported operand for {instr.mnemonic}: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
     return ExecResult()
 
 
 def exec_dec(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     _expect_operands(instr, 1)
-    reg = _require_reg(instr.operands[0], instr)
-    cpu.set_reg(reg, cpu.get_reg(reg) - 1)
+    op = instr.operands[0]
+    if op.type == "reg":
+        reg = _require_reg(op, instr)
+        prev = cpu.get_reg(reg)
+        result = _inc_dec_result(prev, 4, "dec", cpu)
+        cpu.set_reg(reg, result)
+    elif op.type == "mem":
+        value = _read_mem(op, cpu, instr, program)
+        result = _inc_dec_result(value, op.size or 4, "dec", cpu)
+        _write_mem(op, cpu, result, instr, program)
+    else:
+        raise EmulationError(
+            f"Unsupported operand for {instr.mnemonic}: {op.text}",
+            instr.line_no,
+            instr.text,
+        )
+    return ExecResult()
+
+
+def exec_test(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
+    _expect_operands(instr, 2)
+    left = _value_of(instr.operands[0], cpu, instr, program)
+    right = _value_of(instr.operands[1], cpu, instr, program)
+    result = clamp_u32(left & right)
+    cpu.flags["ZF"] = 1 if result == 0 else 0
+    sign_bit = 0x80000000
+    if result == 0:
+        cpu.flags["SF"] = 1 if (left & sign_bit) else 0
+    else:
+        cpu.flags["SF"] = 1 if (result & sign_bit) else 0
+    cpu.flags["CF"] = 0
+    cpu.flags["OF"] = 0
     return ExecResult()
 
 
@@ -251,7 +340,7 @@ def exec_push(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult
     _expect_operands(instr, 1)
     op = instr.operands[0]
     if op.type == "mem":
-        value = _read_mem(op, cpu, instr)
+        value = _read_mem(op, cpu, instr, program)
     else:
         value = _value_of(op, cpu, instr, program)
     cpu.push(value)
@@ -338,10 +427,10 @@ def exec_cmp(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     result = clamp_u32(left - right)
     cpu.flags["ZF"] = 1 if result == 0 else 0
     cpu.flags["SF"] = 1 if (result & 0x80000000) else 0
-    cpu.flags["CF"] = 1 if left < right else 0
     left_signed = (left & 0x7FFFFFFF) - (left & 0x80000000)
     right_signed = (right & 0x7FFFFFFF) - (right & 0x80000000)
     res_signed = (result & 0x7FFFFFFF) - (result & 0x80000000)
+    cpu.flags["CF"] = 1 if left_signed < right_signed else 0
     cpu.flags["OF"] = 1 if ((left_signed ^ right_signed) & (left_signed ^ res_signed) & 0x80000000) else 0
     return ExecResult()
 
@@ -445,6 +534,13 @@ def _simulate_printf(cpu: CPUState) -> ExecResult:
     esp = cpu.get_reg("ESP")
     fmt_ptr = cpu.read_mem(esp + 4, 4)
     fmt = cpu.read_c_string(fmt_ptr)
+    arg_base = 4
+    if not fmt:
+        fallback_ptr = cpu.read_mem(esp + 8, 4)
+        fallback_fmt = cpu.read_c_string(fallback_ptr)
+        if fallback_fmt:
+            fmt = fallback_fmt
+            arg_base = 8
     arg_index = 1
     output = []
     i = 0
@@ -456,7 +552,7 @@ def _simulate_printf(cpu: CPUState) -> ExecResult:
                 output.append("%")
                 i += 2
                 continue
-            raw_arg = cpu.read_mem(esp + 4 + arg_index * 4, 4)
+            raw_arg = cpu.read_mem(esp + arg_base + arg_index * 4, 4)
             arg_index += 1
             if spec in ("d", "i"):
                 value = raw_arg if raw_arg < 0x80000000 else raw_arg - 0x100000000
@@ -497,8 +593,13 @@ def _simulate_printf(cpu: CPUState) -> ExecResult:
 
 def _simulate_puts(cpu: CPUState) -> ExecResult:
     esp = cpu.get_reg("ESP")
-    ptr = cpu.read_mem(esp + 4, 4)
-    text = cpu.read_c_string(ptr)
+    primary_ptr = cpu.read_mem(esp + 4, 4)
+    fallback_ptr = cpu.read_mem(esp + 8, 4)
+    text = cpu.read_c_string(primary_ptr)
+    if not text:
+        fallback_text = cpu.read_c_string(fallback_ptr)
+        if fallback_text:
+            text = fallback_text
     rendered = f"{text}\n"
     cpu.set_reg("EAX", len(rendered))
     return ExecResult(output=rendered, output_target="extern")
@@ -981,6 +1082,16 @@ register_instruction(
         syntax="JNL label",
         flags="Reads SF OF",
         executor=_exec_jge,
+    )
+)
+register_instruction(
+    InstructionDef(
+        mnemonic="TEST",
+        meaning="Bitwise Test",
+        description="Bitwise AND of operands; updates flags, discards result.",
+        syntax="TEST reg/mem, reg/imm",
+        flags="ZF SF CF OF",
+        executor=exec_test,
     )
 )
 register_instruction(

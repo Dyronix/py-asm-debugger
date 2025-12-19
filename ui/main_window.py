@@ -48,6 +48,8 @@ from core.model import Program
 from core.parser import ParseError, parse_assembly
 from core.syscalls import get_syscall_defs
 
+FLAG_ORDER = ["ZF", "SF", "CF", "OF"]
+
 
 class AsmHighlighter(QSyntaxHighlighter):
     def __init__(self, parent) -> None:
@@ -215,6 +217,14 @@ class MainWindow(QMainWindow):
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
         register_layout.addWidget(self.register_table)
+        register_layout.addWidget(QLabel("Flags"))
+        self.flag_table = QTableWidget(len(FLAG_ORDER), 2)
+        self.flag_table.setHorizontalHeaderLabels(["Flag", "Value"])
+        self.flag_table.verticalHeader().setVisible(False)
+        self.flag_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.flag_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.flag_table.setFont(self._default_font())
+        register_layout.addWidget(self.flag_table)
 
         stack_section = QWidget()
         stack_layout = QVBoxLayout(stack_section)
@@ -256,25 +266,19 @@ class MainWindow(QMainWindow):
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setFont(self._default_font())
-        log_dock = QDockWidget("Log / Output", self)
-        log_dock.setObjectName("LogDock")
-        log_dock.setWidget(self.log_output)
+        log_dock = self._build_output_dock("Log / Output", self.log_output, self.clear_log_output, "LogDock")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
         self.syscall_output = QPlainTextEdit()
         self.syscall_output.setReadOnly(True)
         self.syscall_output.setFont(self._default_font())
-        syscall_dock = QDockWidget("Syscall Output", self)
-        syscall_dock.setObjectName("SyscallDock")
-        syscall_dock.setWidget(self.syscall_output)
+        syscall_dock = self._build_output_dock("Syscall Output", self.syscall_output, self.clear_syscall_output, "SyscallDock")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, syscall_dock)
 
         self.extern_output = QPlainTextEdit()
         self.extern_output.setReadOnly(True)
         self.extern_output.setFont(self._default_font())
-        extern_dock = QDockWidget("C Function Output", self)
-        extern_dock.setObjectName("ExternDock")
-        extern_dock.setWidget(self.extern_output)
+        extern_dock = self._build_output_dock("C Function Output", self.extern_output, self.clear_extern_output, "ExternDock")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, extern_dock)
         self.tabifyDockWidget(syscall_dock, extern_dock)
         syscall_dock.raise_()
@@ -334,6 +338,28 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.line_label)
 
         self._apply_dracula_theme()
+
+    def _build_output_dock(self, title: str, text_edit: QPlainTextEdit, clear_handler, object_name: str) -> QDockWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(8, 6, 8, 0)
+        controls.addStretch(1)
+        clear_button = QToolButton()
+        clear_button.setText("Clear")
+        clear_button.setAutoRaise(True)
+        clear_button.clicked.connect(clear_handler)
+        controls.addWidget(clear_button)
+        layout.addLayout(controls)
+        layout.addWidget(text_edit)
+
+        dock = QDockWidget(title, self)
+        dock.setObjectName(object_name)
+        dock.setWidget(container)
+        return dock
 
     def _build_center_controls(self) -> QWidget:
         widget = QWidget()
@@ -604,6 +630,7 @@ class MainWindow(QMainWindow):
         )
         tables = [
             self.register_table,
+            self.flag_table,
             self.stack_table,
             self.symbol_table,
             self.memory_table,
@@ -786,6 +813,15 @@ class MainWindow(QMainWindow):
             self.set_state("Halted")
             self.log("Program halted.")
 
+    def clear_log_output(self) -> None:
+        self.log_output.clear()
+
+    def clear_syscall_output(self) -> None:
+        self.syscall_output.clear()
+
+    def clear_extern_output(self) -> None:
+        self.extern_output.clear()
+
     def reset_state(self) -> None:
         self.timer.stop()
         self.cpu.reset()
@@ -818,6 +854,7 @@ class MainWindow(QMainWindow):
         self.updating_views = True
         try:
             self._update_register_view()
+            self._update_flag_view()
             self._update_stack_view()
             self._update_memory_view()
             self._highlight_current_line()
@@ -841,6 +878,17 @@ class MainWindow(QMainWindow):
             self.register_table.setItem(row, 1, value_item)
         self.register_table.resizeColumnsToContents()
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
+
+    def _update_flag_view(self) -> None:
+        for row, flag in enumerate(FLAG_ORDER):
+            name_item = QTableWidgetItem(flag)
+            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.flag_table.setItem(row, 0, name_item)
+            value = self.cpu.flags.get(flag, 0)
+            value_item = QTableWidgetItem(str(value))
+            value_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.flag_table.setItem(row, 1, value_item)
+        self.flag_table.resizeColumnsToContents()
 
     def _update_stack_view(self) -> None:
         esp = self.cpu.get_reg("ESP")

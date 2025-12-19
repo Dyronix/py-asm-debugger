@@ -22,6 +22,7 @@ DIRECTIVES = {
     "DD",
     "STRING",
     "ASCIZ",
+    "EQU",
 }
 
 
@@ -41,6 +42,39 @@ def _strip_comment(line: str) -> str:
 
 
 SIZE_PREFIXES = {"BYTE": 1, "WORD": 2, "DWORD": 4}
+_CURR_PLACEHOLDER = "__CURR_OFFSET__"
+
+
+def _eval_expression(expr: str, current_offset: int, symbols: dict[str, int], line_no: int, raw_line: str) -> int:
+    """Evaluate simple arithmetic expressions like `$ - MSG` using known symbols."""
+    cleaned = expr.replace("$", _CURR_PLACEHOLDER)
+    try:
+        parsed = ast.parse(cleaned, mode="eval")
+    except SyntaxError as exc:
+        raise ParseError(f"Invalid expression: {expr}", line_no, raw_line) from exc
+
+    def _eval(node: ast.AST) -> int:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return int(node.value)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            val = _eval(node.operand)
+            return val if isinstance(node.op, ast.UAdd) else -val
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
+            left = _eval(node.left)
+            right = _eval(node.right)
+            return left + right if isinstance(node.op, ast.Add) else left - right
+        if isinstance(node, ast.Name):
+            key = node.id.upper()
+            if key == _CURR_PLACEHOLDER.upper():
+                return current_offset
+            if key in symbols:
+                return symbols[key]
+            raise ParseError(f"Unknown symbol in expression: {node.id}", line_no, raw_line)
+        raise ParseError(f"Unsupported expression: {expr}", line_no, raw_line)
+
+    return _eval(parsed)
 
 
 def _parse_char_literal(raw: str) -> int | None:
@@ -93,6 +127,19 @@ def _parse_operand(token: str) -> Operand:
                 if sign == "-":
                     offset = -offset
                 return Operand(type="mem", value=(base, offset), text=raw, size=size)
+        label_match = re.fullmatch(
+            r"([A-Za-z_.$@][A-Za-z0-9_.$@]*)(?:\s*([+-])\s*(0x[0-9A-Fa-f]+|-?\d+))?", inner
+        )
+        if label_match:
+            base = label_match.group(1)
+            sign = label_match.group(2)
+            offset_text = label_match.group(3)
+            offset = 0
+            if offset_text:
+                offset = int(offset_text, 16) if offset_text.lower().startswith("0x") else int(offset_text, 10)
+                if sign == "-":
+                    offset = -offset
+            return Operand(type="mem", value=(base, offset), text=raw, size=size)
         return Operand(type="unsupported", value=raw, text=raw, size=size)
     if re.fullmatch(r"0x[0-9A-Fa-f]+", raw):
         return Operand(type="imm", value=int(raw, 16), text=raw, size=size)
@@ -193,6 +240,7 @@ def parse_assembly(text: str) -> Program:
     globals_set: set[str] = set()
     data_labels: dict[str, int] = {}
     data_bytes: dict[int, int] = {}
+    constants: dict[str, int] = {}
     data_addr = 0x2000
     section = "text"
 
@@ -237,6 +285,18 @@ def parse_assembly(text: str) -> Program:
             if not working:
                 break
         if not working:
+            continue
+
+        tokens = working.split(None, 2)
+        if len(tokens) >= 3 and tokens[1].upper() == "EQU":
+            const_name = tokens[0].upper()
+            expr = tokens[2]
+            symbols: dict[str, int] = {}
+            symbols.update(labels)
+            symbols.update(data_labels)
+            symbols.update(constants)
+            value = _eval_expression(expr, data_addr if section == "data" else len(instructions), symbols, idx, raw_line)
+            constants[const_name] = value
             continue
 
         parts = working.split(None, 1)
@@ -310,4 +370,5 @@ def parse_assembly(text: str) -> Program:
         globals=globals_set,
         data_labels=data_labels,
         data_bytes=data_bytes,
+        constants=constants,
     )
