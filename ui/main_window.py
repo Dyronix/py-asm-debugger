@@ -4,13 +4,14 @@ import os
 import json
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QRect, QSize, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
     QFont,
     QFontDatabase,
     QKeySequence,
+    QPainter,
     QTextCharFormat,
     QPalette,
     QShortcut,
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QHeaderView,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -30,6 +32,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QSpinBox,
     QStatusBar,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -39,6 +42,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QTextEdit,
+    QAbstractItemView,
 )
 
 from core.cpu import CPUState, REGISTER_ORDER, clamp_u32
@@ -47,6 +51,12 @@ from core.instructions import EmulationError, get_instruction_defs
 from core.model import Program
 from core.parser import ParseError, parse_assembly
 from core.syscalls import get_syscall_defs
+from ui.breakpoints import (
+    BreakpointManager,
+    BreakpointsTableModel,
+    BreakpointType,
+    ConditionalBreakpointDialog,
+)
 
 FLAG_ORDER = ["ZF", "SF", "CF", "OF"]
 
@@ -105,6 +115,146 @@ class AsmHighlighter(QSyntaxHighlighter):
                 self.setFormat(start, len(tok), self.number_format)
 
 
+class LineNumberArea(QWidget):
+    def __init__(self, editor: "CodeEditor") -> None:
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self) -> QSize:
+        return QSize(self.editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event) -> None:
+        self.editor.line_number_area_paint_event(event)
+
+    def mousePressEvent(self, event) -> None:
+        self.editor.line_number_area_mouse_event(event)
+
+
+class CodeEditor(QPlainTextEdit):
+    breakpoint_toggle_requested = pyqtSignal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._line_number_bg = QColor("#1e1f29")
+        self._line_number_fg = QColor("#6272a4")
+        self._breakpoint_area_width = 14
+        self._breakpoint_enabled_color = QColor("#ff5555")
+        self._breakpoint_disabled_color = QColor("#6272a4")
+        self._breakpoint_temporary_color = QColor("#ffb86c")
+        self.breakpoint_manager: Optional[BreakpointManager] = None
+        self.current_file: Optional[str] = None
+        self.line_number_area = LineNumberArea(self)
+
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.update_line_number_area_width(0)
+
+    def set_line_number_colors(self, background: QColor, foreground: QColor) -> None:
+        self._line_number_bg = background
+        self._line_number_fg = foreground
+        self.line_number_area.update()
+
+    def line_number_area_width(self) -> int:
+        digits = max(1, len(str(self.blockCount())))
+        return self._breakpoint_area_width + 10 + self.fontMetrics().horizontalAdvance("9") * digits
+
+    def set_breakpoint_manager(self, manager: Optional[BreakpointManager]) -> None:
+        self.breakpoint_manager = manager
+        self.line_number_area.update()
+
+    def set_current_file(self, path: Optional[str]) -> None:
+        self.current_file = path
+        self.line_number_area.update()
+
+    def update_line_number_area_width(self, _block_count: int) -> None:
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def update_line_number_area(self, rect: QRect, dy: int) -> None:
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self.update_line_number_area_width(0)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        contents = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(contents.left(), contents.top(), self.line_number_area_width(), contents.height())
+        )
+
+    def line_number_area_paint_event(self, event) -> None:
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), self._line_number_bg)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        line_breakpoints = {}
+        if self.breakpoint_manager and self.current_file:
+            for bp in self.breakpoint_manager.get_line_breakpoints(self.current_file):
+                if bp.line is None:
+                    continue
+                if bp.type == BreakpointType.TEMPORARY_LINE or bp.line not in line_breakpoints:
+                    line_breakpoints[bp.line] = bp
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                line_no = block_number + 1
+                bp = line_breakpoints.get(line_no)
+                if bp:
+                    radius = 5
+                    center_x = self._breakpoint_area_width // 2
+                    center_y = int(top + (self.fontMetrics().height() / 2))
+                    if not bp.enabled:
+                        painter.setPen(self._breakpoint_disabled_color)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                    else:
+                        color = (
+                            self._breakpoint_temporary_color
+                            if bp.type == BreakpointType.TEMPORARY_LINE
+                            else self._breakpoint_enabled_color
+                        )
+                        painter.setPen(color)
+                        painter.setBrush(color)
+                    painter.drawEllipse(center_x - radius, center_y - radius, radius * 2, radius * 2)
+                painter.setPen(self._line_number_fg)
+                painter.drawText(
+                    self._breakpoint_area_width,
+                    int(top),
+                    self.line_number_area.width() - self._breakpoint_area_width - 6,
+                    int(self.fontMetrics().height()),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    number,
+                )
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            block_number += 1
+
+    def line_number_area_mouse_event(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        y = event.position().y()
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+        while block.isValid() and top <= y:
+            if block.isVisible() and bottom >= y:
+                self.breakpoint_toggle_requested.emit(block_number + 1)
+                return
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            block_number += 1
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -118,11 +268,13 @@ class MainWindow(QMainWindow):
         self.prev_registers: dict[str, int] = {}
         self.prev_stack_values: dict[int, int] = {}
         self.execution_mode = "Freestanding"
+        self._skip_breakpoint_id: Optional[int] = None
 
         self.cpu = CPUState()
         self.program = Program(instructions=[], labels={})
         self.emulator = Emulator(self.cpu, self.program)
         self.icon_font_family, self.icon_map, self.icon_is_ligature = self._load_icon_font()
+        self.breakpoint_manager = BreakpointManager()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_step)
@@ -132,6 +284,7 @@ class MainWindow(QMainWindow):
         self._update_views()
         self._update_status()
         self._load_layout()
+        self._load_breakpoints()
 
     def _resolve_entry_point(self) -> int | None:
         if self.program.entry_point is not None:
@@ -165,6 +318,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Controls")
         toolbar.setObjectName("ControlsToolbar")
         self.addToolBar(toolbar)
+        self.toolbar = toolbar
 
         new_action = QAction("New", self)
         new_action.triggered.connect(self.new_file)
@@ -184,6 +338,20 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        toggle_bp_action = QAction("Toggle Breakpoint", self)
+        toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
+        toolbar.addAction(toggle_bp_action)
+
+        break_here_action = QAction("Break Here", self)
+        break_here_action.triggered.connect(self.break_here)
+        toolbar.addAction(break_here_action)
+
+        conditional_bp_action = QAction("Add Conditional Breakpoint...", self)
+        conditional_bp_action.triggered.connect(self.add_conditional_breakpoint)
+        toolbar.addAction(conditional_bp_action)
+
+        toolbar.addSeparator()
+
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)
@@ -200,9 +368,13 @@ class MainWindow(QMainWindow):
         center_layout.setContentsMargins(8, 8, 8, 8)
         center_layout.addWidget(QLabel("Assembly Editor"))
         center_layout.addWidget(self._build_center_controls())
-        self.editor = QPlainTextEdit()
+        self.editor = CodeEditor()
         self.editor.setFont(self._default_font())
+        self.editor.update_line_number_area_width(0)
         self.editor.textChanged.connect(self.on_text_changed)
+        self.editor.set_breakpoint_manager(self.breakpoint_manager)
+        self.editor.set_current_file(self._current_file_key())
+        self.editor.breakpoint_toggle_requested.connect(self.on_gutter_breakpoint_toggle)
         self.highlighter = AsmHighlighter(self.editor.document())
         center_layout.addWidget(self.editor)
         center_layout.addLayout(self._build_editor_footer())
@@ -329,6 +501,22 @@ class MainWindow(QMainWindow):
         memory_dock.setWidget(memory_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, memory_dock)
 
+        self.breakpoints_model = BreakpointsTableModel(self.breakpoint_manager)
+        self.breakpoints_view = QTableView()
+        self.breakpoints_view.setModel(self.breakpoints_model)
+        self.breakpoints_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.breakpoints_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.breakpoints_view.setAlternatingRowColors(True)
+        self.breakpoints_view.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
+        self.breakpoints_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.breakpoints_view.verticalHeader().setVisible(False)
+        self.breakpoints_view.clicked.connect(self.on_breakpoints_table_clicked)
+        breakpoints_dock = QDockWidget("Breakpoints", self)
+        breakpoints_dock.setObjectName("BreakpointsDock")
+        breakpoints_dock.setWidget(self.breakpoints_view)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, breakpoints_dock)
+        self.breakpoints_dock = breakpoints_dock
+
         status = QStatusBar()
         self.setStatusBar(status)
         status.setStyleSheet("QStatusBar { padding: 6px 10px; }")
@@ -338,6 +526,11 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.line_label)
 
         self._apply_dracula_theme()
+        self.breakpoint_manager.changed.connect(self._on_breakpoints_changed)
+
+        breakpoints_toggle_action = self.breakpoints_dock.toggleViewAction()
+        breakpoints_toggle_action.setText("Breakpoints")
+        self.toolbar.addAction(breakpoints_toggle_action)
 
     def _build_output_dock(self, title: str, text_edit: QPlainTextEdit, clear_handler, object_name: str) -> QDockWidget:
         container = QWidget()
@@ -415,9 +608,24 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.rate_spin)
         return layout
 
+    def _current_file_key(self) -> str:
+        return self.current_file or "__unsaved__"
+
+    def _set_current_file(self, path: Optional[str]) -> None:
+        self.current_file = os.path.abspath(path) if path else None
+        self.editor.set_current_file(self._current_file_key())
+        if self.current_file:
+            self.setWindowTitle(f"ASM Debugger - {self.current_file}")
+        else:
+            self.setWindowTitle("ASM Debugger")
+
     def _config_path(self) -> str:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(base_dir, ".asm_debugger_layout.json")
+
+    def _breakpoints_path(self) -> str:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, ".asm_debugger_breakpoints.json")
 
     def _load_layout(self) -> None:
         path = self._config_path()
@@ -469,8 +677,27 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    def _load_breakpoints(self) -> None:
+        path = self._breakpoints_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.breakpoint_manager.load_json(data)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+    def _save_breakpoints(self) -> None:
+        try:
+            with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
+                json.dump(self.breakpoint_manager.to_json(), f, indent=2)
+        except OSError:
+            pass
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_layout()
+        self._save_breakpoints()
         super().closeEvent(event)
 
     def _load_icon_font(self) -> tuple[Optional[str], dict[str, str], bool]:
@@ -611,9 +838,11 @@ class MainWindow(QMainWindow):
             palette.setColor(QPalette.ColorRole.HighlightedText, highlight_fg)
             edit.setPalette(palette)
             edit.setStyleSheet(f"QPlainTextEdit {{ background-color: {base_bg.name()}; color: {text_fg.name()}; }}")
+        if isinstance(self.editor, CodeEditor):
+            self.editor.set_line_number_colors(panel_bg, QColor("#6272a4"))
 
         selection_style = (
-            "QTableWidget {"
+            "QTableWidget, QTableView {"
             f" background-color: {panel_bg.name()};"
             f" color: {text_fg.name()};"
             f" gridline-color: {border.name()};"
@@ -623,7 +852,7 @@ class MainWindow(QMainWindow):
             f" color: {text_fg.name()};"
             " padding: 4px;"
             "}"
-            "QTableWidget::item:selected {"
+            "QTableWidget::item:selected, QTableView::item:selected {"
             f" background: {highlight_bg.name()};"
             f" color: {highlight_fg.name()};"
             "}"
@@ -639,6 +868,8 @@ class MainWindow(QMainWindow):
         ]
         for table in tables:
             table.setStyleSheet(selection_style)
+        if hasattr(self, "breakpoints_view"):
+            self.breakpoints_view.setStyleSheet(selection_style)
 
         palette = self.palette()
         palette.setColor(QPalette.ColorRole.Window, panel_bg)
@@ -693,29 +924,87 @@ class MainWindow(QMainWindow):
         self._populate_syscall_sheet()
         return widget
 
+    def _on_breakpoints_changed(self) -> None:
+        if isinstance(self.editor, CodeEditor):
+            self.editor.line_number_area.update()
+        self._save_breakpoints()
+
+    def on_gutter_breakpoint_toggle(self, line_no: int) -> None:
+        self.breakpoint_manager.toggle_line(self._current_file_key(), line_no)
+
+    def toggle_breakpoint_at_cursor(self) -> None:
+        line_no = self.editor.textCursor().blockNumber() + 1
+        self.breakpoint_manager.toggle_line(self._current_file_key(), line_no)
+
+    def break_here(self) -> None:
+        line_no = self.editor.textCursor().blockNumber() + 1
+        self.breakpoint_manager.add_line(self._current_file_key(), line_no, temporary=True)
+        if self.run_state != "Running":
+            self.play()
+
+    def add_conditional_breakpoint(self) -> None:
+        dialog = ConditionalBreakpointDialog(self)
+        result = dialog.get_data()
+        if not result:
+            return
+        kind, name, value = result
+        if kind == "Register":
+            self.breakpoint_manager.add_register_condition(name, value)
+        else:
+            self.breakpoint_manager.add_flag_condition(name, value)
+
+    def on_breakpoints_table_clicked(self, index) -> None:
+        bp = self.breakpoints_model.breakpoint_at(index.row())
+        if not bp:
+            return
+        if index.column() == 0:
+            return
+        if index.column() == 5:
+            self.breakpoint_manager.remove(bp.id)
+            return
+        if bp.file_path and bp.line:
+            if not os.path.exists(bp.file_path):
+                self.log(f"Breakpoint file not found: {bp.file_path}")
+                return
+            if self.current_file != bp.file_path:
+                if not self._open_file_path(bp.file_path):
+                    return
+            self._jump_to_line(bp.line)
+
+    def _open_file_path(self, path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                self.editor.setPlainText(file.read())
+            self._set_current_file(path)
+            self.source_dirty = True
+            self.log(f"Opened {path}")
+            return True
+        except OSError as exc:
+            QMessageBox.warning(self, "Open Failed", str(exc))
+            return False
+
+    def _jump_to_line(self, line_no: int) -> None:
+        block = self.editor.document().findBlockByNumber(line_no - 1)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        self.editor.setTextCursor(cursor)
+        self.editor.centerCursor()
+
     def on_text_changed(self) -> None:
         self.source_dirty = True
 
     def new_file(self) -> None:
         self.editor.clear()
-        self.current_file = None
+        self._set_current_file(None)
         self.source_dirty = True
-        self.setWindowTitle("ASM Debugger")
         self.log("New file created.")
 
     def open_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open .asm", "", "ASM Files (*.asm);;All Files (*)")
         if not path:
             return
-        try:
-            with open(path, "r", encoding="utf-8") as file:
-                self.editor.setPlainText(file.read())
-            self.current_file = path
-            self.source_dirty = True
-            self.setWindowTitle(f"ASM Debugger - {path}")
-            self.log(f"Opened {path}")
-        except OSError as exc:
-            QMessageBox.warning(self, "Open Failed", str(exc))
+        self._open_file_path(path)
 
     def save_file(self) -> None:
         if not self.current_file:
@@ -733,9 +1022,8 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save .asm", "", "ASM Files (*.asm);;All Files (*)")
         if not path:
             return
-        self.current_file = path
+        self._set_current_file(path)
         self.save_file()
-        self.setWindowTitle(f"ASM Debugger - {path}")
 
     def parse_current_program(self) -> bool:
         try:
@@ -756,6 +1044,11 @@ class MainWindow(QMainWindow):
         self.prev_registers = {}
         self.prev_stack_values = {}
         self.source_dirty = False
+        self._skip_breakpoint_id = None
+        self.breakpoint_manager.set_valid_lines(
+            self._current_file_key(),
+            {instr.line_no for instr in self.program.instructions},
+        )
         self._populate_symbols()
         self.set_state("Ready")
         self._update_views()
@@ -776,6 +1069,36 @@ class MainWindow(QMainWindow):
         if self.run_state == "Running":
             self.set_state("Paused")
 
+    def _check_breakpoints_before_step(self) -> bool:
+        if not self.program.instructions:
+            return False
+        eip = self.cpu.get_reg("EIP")
+        if not (0 <= eip < len(self.program.instructions)):
+            return False
+        line_no = self.program.instructions[eip].line_no
+        should_break, bp_id, reason = self.breakpoint_manager.should_break(
+            self._current_file_key(), line_no, self.cpu
+        )
+        if not should_break or bp_id is None:
+            return False
+        if self._skip_breakpoint_id == bp_id:
+            self._skip_breakpoint_id = None
+            return False
+        removed = self.breakpoint_manager.increment_hit(bp_id)
+        bp = self.breakpoint_manager.get(bp_id)
+        if bp and bp.type in {BreakpointType.LINE, BreakpointType.TEMPORARY_LINE} and not removed:
+            self._skip_breakpoint_id = bp_id
+        else:
+            self._skip_breakpoint_id = None
+        self.timer.stop()
+        self.set_state("Paused")
+        if reason:
+            self.log(f"Breakpoint hit: {reason}")
+        else:
+            self.log("Breakpoint hit.")
+        self._update_views()
+        return True
+
     def step_once(self) -> None:
         self.timer.stop()
         if not self.ensure_program():
@@ -784,6 +1107,8 @@ class MainWindow(QMainWindow):
             self.log("Execution halted. Reset to run again.")
             self.set_state("Halted")
             return
+        if self._check_breakpoints_before_step():
+            return
         outcome = self.emulator.step()
         self.handle_step_outcome(outcome)
         self._update_views()
@@ -791,6 +1116,8 @@ class MainWindow(QMainWindow):
             self.set_state("Paused")
 
     def on_timer_step(self) -> None:
+        if self._check_breakpoints_before_step():
+            return
         outcome = self.emulator.step()
         self.handle_step_outcome(outcome)
         self._update_views()
@@ -832,6 +1159,7 @@ class MainWindow(QMainWindow):
         self.emulator = Emulator(self.cpu, self.program)
         self.prev_registers = {}
         self.prev_stack_values = {}
+        self._skip_breakpoint_id = None
         self.set_state("Ready")
         self._update_views()
         self.log("CPU state reset.")
