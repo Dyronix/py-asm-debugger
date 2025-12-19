@@ -1088,10 +1088,16 @@ class MainWindow(QMainWindow):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(base_dir, ".asm_debugger_breakpoints.json")
 
+    def _default_layout_path(self) -> str:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, ".asm_debugger_layout.default.json")
+
     def _load_layout(self) -> None:
         path = self._config_path()
         if not os.path.exists(path):
-            return
+            path = self._default_layout_path()
+            if not os.path.exists(path):
+                return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
