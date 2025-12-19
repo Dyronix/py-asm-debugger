@@ -1,6 +1,22 @@
 # ASM Debugger
 
+![Release workflow status](https://github.com/dsquad/py-asm-debugger/actions/workflows/release.yml/badge.svg)
+
 A simple x86 (Intel syntax) assembly editor and step debugger built with PyQt6.
+
+## Overview
+
+ASM Debugger is a teaching-focused debugger for small x86 snippets. It combines a
+lightweight emulator with a UI that keeps state visible and editable, so you can
+step instructions, see register/flag changes, inspect memory, and experiment with
+stack operations in real time.
+
+## Project Layout
+
+- `core/`: CPU state, instruction definitions, emulator, and parser.
+- `ui/`: PyQt6 UI for editor, register/stack panels, memory view, and logs.
+- `examples/`: Sample `.asm` programs.
+- `tests/`: Pytest-based unit tests.
 
 ## Features
 
@@ -57,3 +73,9 @@ Sample programs are in `examples/`.
 
 - `examples/add_sub_demo.asm`
 - `examples/push_pop_demo.asm`
+
+## Tests
+
+```bash
+python -m pytest
+```
