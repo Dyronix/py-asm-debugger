@@ -4,14 +4,16 @@ import os
 import json
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QRect, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QTimer, QRect, QSize, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
     QFont,
     QFontDatabase,
+    QIcon,
     QKeySequence,
     QPainter,
+    QPixmap,
     QTextCharFormat,
     QPalette,
     QShortcut,
@@ -37,12 +39,14 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QToolButton,
-    QToolBar,
+    QStyle,
     QSplitter,
     QVBoxLayout,
     QWidget,
     QTextEdit,
     QAbstractItemView,
+    QAbstractScrollArea,
+    QSizePolicy,
 )
 
 from core.cpu import CPUState, REGISTER_ORDER, clamp_u32
@@ -269,12 +273,34 @@ class MainWindow(QMainWindow):
         self.prev_stack_values: dict[int, int] = {}
         self.execution_mode = "Freestanding"
         self._skip_breakpoint_id: Optional[int] = None
+        self.recent_files: list[str] = []
+        self._max_recent_files = 10
 
         self.cpu = CPUState()
         self.program = Program(instructions=[], labels={})
         self.emulator = Emulator(self.cpu, self.program)
         self.icon_font_family, self.icon_map, self.icon_is_ligature = self._load_icon_font()
         self.breakpoint_manager = BreakpointManager()
+        self._pinnable_panels: dict[QWidget, bool] = {}
+        self._panel_contents: dict[QWidget, QWidget] = {}
+        self._panel_restore_sizes: dict[QWidget, int] = {}
+        self._panel_splitters: dict[QWidget, QSplitter] = {}
+        self._panel_widget_map: dict[QWidget, QWidget] = {}
+        self._panel_pin_buttons: dict[QWidget, QToolButton] = {}
+        self._panel_headers: dict[QWidget, QWidget] = {}
+        self._panel_collapse_buttons: dict[QWidget, QWidget] = {}
+        self._panel_view_actions: dict[QWidget, QAction] = {}
+        self._panel_names: dict[QWidget, str] = {}
+        self._panel_axes: dict[QWidget, str] = {}
+        self._collapsed_panel_size = 72
+        self._collapsed_panel_height = 48
+        self._pending_pinned_state: Optional[dict[str, bool]] = None
+        self._pin_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarUnshadeButton)
+        self._unpin_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarShadeButton)
+        self._close_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton)
+        self._collapse_left_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
+        self._collapse_right_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)
+        self._collapse_bottom_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_step)
@@ -285,6 +311,7 @@ class MainWindow(QMainWindow):
         self._update_status()
         self._load_layout()
         self._load_breakpoints()
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
 
     def _resolve_entry_point(self) -> int | None:
         if self.program.entry_point is not None:
@@ -298,9 +325,11 @@ class MainWindow(QMainWindow):
 
         shortcut_map = [
             ("F5", self.play),
-            ("F9", self.pause),
+            ("Shift+F5", self.pause),
+            ("F9", self.toggle_breakpoint_at_cursor),
             ("F10", self.step_once),
             ("Ctrl+Shift+F5", self.reset_state),
+            ("Ctrl+Alt+B", self._show_breakpoints_dock),
             ("PgUp", lambda: self._adjust_step_rate(1)),
             ("PgDown", lambda: self._adjust_step_rate(-1)),
         ]
@@ -309,59 +338,384 @@ class MainWindow(QMainWindow):
             shortcut.activated.connect(handler)
             self.shortcuts.append(shortcut)
 
+    def _build_panel_header(self, title: str, panel: QWidget) -> QWidget:
+        header = QWidget()
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(4, 4, 4, 0)
+        label = QLabel(title)
+        layout.addWidget(label)
+        layout.addStretch(1)
+
+        pin_button = QToolButton()
+        pin_button.setCheckable(True)
+        pin_button.setChecked(True)
+        pin_button.setAutoRaise(True)
+        pin_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._set_pin_button_state(pin_button, True)
+        pin_button.toggled.connect(lambda checked, p=panel: self._set_panel_pinned(p, checked))
+        layout.addWidget(pin_button)
+
+        close_button = QToolButton()
+        close_button.setAutoRaise(True)
+        close_button.setIcon(self._close_icon)
+        close_button.setToolTip("Close panel")
+        close_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        close_button.clicked.connect(lambda checked=False, p=panel: self._close_panel(p))
+        layout.addWidget(close_button)
+
+        self._panel_pin_buttons[panel] = pin_button
+        self._panel_headers[panel] = header
+        self._panel_widget_map[header] = panel
+        header.installEventFilter(self)
+        return header
+
+    def _tinted_icon(self, icon: QIcon, color: QColor, size: int = 18) -> QIcon:
+        if icon.isNull():
+            return icon
+        pixmap = icon.pixmap(size, size)
+        if pixmap.isNull():
+            return icon
+        tinted = QPixmap(pixmap.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(tinted)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), color)
+        painter.end()
+        return QIcon(tinted)
+
+    def _build_panel_collapse_button(
+        self, title: str, panel: QWidget, icon: QIcon, orientation: str = "horizontal"
+    ) -> QWidget:
+        container = QWidget()
+        if orientation == "vertical":
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(8, 4, 8, 4)
+            container.setMinimumHeight(self._collapsed_panel_height)
+            button = QToolButton()
+            button.setAutoRaise(True)
+            button.setIcon(self._tinted_icon(icon, QColor("#f8f8f2")))
+            button.setIconSize(QSize(18, 18))
+            button.setText(title)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            font = button.font()
+            font.setWeight(QFont.Weight.DemiBold)
+            button.setFont(font)
+            button.setStyleSheet(
+                "QToolButton { background: #2f4f6f; color: #f8f8f2; border-radius: 4px; padding: 6px 14px; text-align: left; }"
+                "QToolButton::icon { margin-right: 8px; }"
+                "QToolButton:hover { background: #3a5b7f; }"
+            )
+            button.setToolTip(f"Show {title}")
+            button.clicked.connect(lambda checked=False, p=panel: self._expand_panel(p))
+            layout.addStretch(1)
+            layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignCenter)
+            layout.addStretch(1)
+        else:
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            container.setMinimumWidth(self._collapsed_panel_size)
+            layout.addStretch(1)
+            button = QToolButton()
+            button.setAutoRaise(True)
+            button.setIcon(self._tinted_icon(icon, QColor("#f8f8f2")))
+            button.setIconSize(QSize(20, 20))
+            button.setText("\n".join(title))
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            button.setMinimumHeight(120)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            font = button.font()
+            font.setWeight(QFont.Weight.DemiBold)
+            button.setFont(font)
+            button.setStyleSheet(
+                "QToolButton { background: #2f4f6f; color: #f8f8f2; border-radius: 4px; padding: 6px; }"
+                "QToolButton:hover { background: #3a5b7f; }"
+            )
+            button.setToolTip(f"Show {title}")
+            button.clicked.connect(lambda checked=False, p=panel: self._expand_panel(p))
+            layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignCenter)
+            layout.addStretch(1)
+        container.setVisible(False)
+
+        self._panel_collapse_buttons[panel] = container
+        self._panel_widget_map[container] = panel
+        self._panel_widget_map[button] = panel
+        container.installEventFilter(self)
+        button.installEventFilter(self)
+        return container
+
+    def _set_pin_button_state(self, button: QToolButton, pinned: bool) -> None:
+        if pinned:
+            icon = self._pin_icon
+            tooltip = "Pin panel"
+        else:
+            icon = self._unpin_icon
+            tooltip = "Unpin panel"
+        button.setIcon(icon)
+        button.setText("")
+        button.setToolTip(tooltip)
+
+    def _register_pinnable_panel(
+        self, panel: QWidget, content: QWidget, splitter: QSplitter, name: str, axis: str = "horizontal"
+    ) -> None:
+        self._pinnable_panels[panel] = True
+        self._panel_contents[panel] = content
+        self._panel_splitters[panel] = splitter
+        self._panel_names[panel] = name
+        self._panel_axes[panel] = axis
+        for widget in (panel, content):
+            self._panel_widget_map[widget] = panel
+            widget.installEventFilter(self)
+        header = self._panel_headers.get(panel)
+        collapse_button = self._panel_collapse_buttons.get(panel)
+        for widget in (header, collapse_button):
+            if widget is None:
+                continue
+            self._panel_widget_map[widget] = panel
+            widget.installEventFilter(self)
+
+    def _set_panel_pinned(self, panel: QWidget, pinned: bool) -> None:
+        self._pinnable_panels[panel] = pinned
+        button = self._panel_pin_buttons.get(panel)
+        if button is not None:
+            if button.isChecked() != pinned:
+                button.blockSignals(True)
+                button.setChecked(pinned)
+                button.blockSignals(False)
+            self._set_pin_button_state(button, pinned)
+        if pinned:
+            self._expand_panel(panel)
+        else:
+            self._maybe_collapse_panel(panel)
+
+    def _close_panel(self, panel: QWidget) -> None:
+        panel.setVisible(False)
+        action = self._panel_view_actions.get(panel)
+        if action is not None:
+            action.setChecked(False)
+
+    def _set_splitter_size(self, splitter: QSplitter, panel: QWidget, size: int) -> None:
+        index = splitter.indexOf(panel)
+        if index == -1:
+            return
+        sizes = splitter.sizes()
+        if index >= len(sizes):
+            return
+        sizes[index] = size
+        splitter.setSizes(sizes)
+
+    def _collapse_panel(self, panel: QWidget) -> None:
+        if panel not in self._panel_contents:
+            return
+        axis = self._panel_axes.get(panel, "horizontal")
+        if axis == "vertical":
+            size_value = panel.height()
+        else:
+            size_value = panel.width()
+        if size_value > 0:
+            self._panel_restore_sizes[panel] = size_value
+        content = self._panel_contents[panel]
+        content.setVisible(False)
+        header = self._panel_headers.get(panel)
+        if header is not None:
+            header.setVisible(False)
+        collapse_button = self._panel_collapse_buttons.get(panel)
+        target_size = self._collapsed_panel_height if axis == "vertical" else self._collapsed_panel_size
+        if collapse_button is not None:
+            collapse_button.setVisible(True)
+            hint = collapse_button.sizeHint().height() if axis == "vertical" else collapse_button.sizeHint().width()
+            target_size = max(target_size, hint)
+        if axis == "vertical":
+            panel.setMinimumHeight(target_size)
+            panel.setMaximumHeight(target_size)
+        else:
+            panel.setMinimumWidth(target_size)
+            panel.setMaximumWidth(target_size)
+        splitter = self._panel_splitters.get(panel)
+        if splitter is not None:
+            self._set_splitter_size(splitter, panel, target_size)
+        panel.updateGeometry()
+        panel.update()
+
+    def _expand_panel(self, panel: QWidget) -> None:
+        if panel not in self._panel_contents:
+            return
+        content = self._panel_contents[panel]
+        axis = self._panel_axes.get(panel, "horizontal")
+        if axis == "vertical":
+            panel.setMinimumHeight(0)
+            panel.setMaximumHeight(16777215)
+        else:
+            panel.setMinimumWidth(0)
+            panel.setMaximumWidth(16777215)
+        content.setVisible(True)
+        header = self._panel_headers.get(panel)
+        if header is not None:
+            header.setVisible(True)
+        collapse_button = self._panel_collapse_buttons.get(panel)
+        if collapse_button is not None:
+            collapse_button.setVisible(False)
+        splitter = self._panel_splitters.get(panel)
+        if splitter is not None:
+            size_hint = panel.sizeHint().height() if axis == "vertical" else panel.sizeHint().width()
+            size = self._panel_restore_sizes.get(panel, size_hint)
+            self._set_splitter_size(splitter, panel, size)
+        if not self._pinnable_panels.get(panel, True):
+            pin_button = self._panel_pin_buttons.get(panel)
+            if pin_button is not None:
+                pin_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _maybe_collapse_panel(self, panel: QWidget) -> None:
+        if self._pinnable_panels.get(panel, True):
+            return
+        if not panel.isVisible():
+            return
+        focus = self.focusWidget()
+        if focus is not None and (focus is panel or panel.isAncestorOf(focus)):
+            return
+        self._collapse_panel(panel)
+
+    def _on_panel_visibility_changed(self, panel: QWidget, visible: bool) -> None:
+        if not visible:
+            return
+        if self._pinnable_panels.get(panel, True):
+            self._expand_panel(panel)
+        else:
+            self._maybe_collapse_panel(panel)
+
+    def eventFilter(self, obj, event) -> bool:
+        panel = self._panel_widget_map.get(obj)
+        if panel is not None and not self._pinnable_panels.get(panel, True):
+            event_type = event.type()
+            if event_type == QEvent.Type.FocusIn:
+                self._expand_panel(panel)
+            elif event_type == QEvent.Type.FocusOut:
+                QTimer.singleShot(0, lambda p=panel: self._maybe_collapse_panel(p))
+        return super().eventFilter(obj, event)
+
+    def _on_focus_changed(self, old, new) -> None:
+        if old is None:
+            return
+        for panel, pinned in self._pinnable_panels.items():
+            if pinned:
+                continue
+            if old is panel or panel.isAncestorOf(old):
+                if new is None or not (new is panel or panel.isAncestorOf(new)):
+                    self._maybe_collapse_panel(panel)
+
+    def _rebuild_recent_menu(self) -> None:
+        self.open_recent_menu.clear()
+        if not self.recent_files:
+            empty_action = QAction("No recent files", self)
+            empty_action.setEnabled(False)
+            self.open_recent_menu.addAction(empty_action)
+            return
+        for path in self.recent_files:
+            action = QAction(path, self)
+            action.triggered.connect(lambda checked=False, p=path: self._open_recent_path(p))
+            self.open_recent_menu.addAction(action)
+        self.open_recent_menu.addSeparator()
+        clear_action = QAction("Clear Recent", self)
+        clear_action.triggered.connect(self.clear_recent_files)
+        self.open_recent_menu.addAction(clear_action)
+
+    def _add_recent_file(self, path: str) -> None:
+        if not path:
+            return
+        if path in self.recent_files:
+            self.recent_files.remove(path)
+        self.recent_files.insert(0, path)
+        if len(self.recent_files) > self._max_recent_files:
+            self.recent_files = self.recent_files[: self._max_recent_files]
+        self._rebuild_recent_menu()
+
+    def _remove_recent_file(self, path: str) -> None:
+        if path in self.recent_files:
+            self.recent_files.remove(path)
+            self._rebuild_recent_menu()
+
+    def _open_recent_path(self, path: str) -> None:
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Open Failed", f"File not found: {path}")
+            self._remove_recent_file(path)
+            return
+        self._open_file_path(path)
+
+    def clear_recent_files(self) -> None:
+        self.recent_files = []
+        self._rebuild_recent_menu()
+
+    def _show_breakpoints_dock(self) -> None:
+        if self.breakpoints_dock is None:
+            return
+        self.breakpoints_dock.setVisible(True)
+        self.breakpoints_dock.raise_()
+
     def _on_mode_changed(self, index: int) -> None:
         self.execution_mode = "Snippet" if index == 1 else "Freestanding"
         self.log(f"Mode set to {self.execution_mode}.")
         self._update_views()
 
     def _build_ui(self) -> None:
-        toolbar = QToolBar("Controls")
-        toolbar.setObjectName("ControlsToolbar")
-        self.addToolBar(toolbar)
-        self.toolbar = toolbar
+        self.file_menu = self.menuBar().addMenu("File")
+        self.debug_menu = self.menuBar().addMenu("Debug")
+        self.view_menu = self.menuBar().addMenu("View")
 
         new_action = QAction("New", self)
         new_action.triggered.connect(self.new_file)
-        toolbar.addAction(new_action)
+        self.file_menu.addAction(new_action)
 
         open_action = QAction("Open", self)
         open_action.triggered.connect(self.open_file)
-        toolbar.addAction(open_action)
+        self.file_menu.addAction(open_action)
 
         save_action = QAction("Save", self)
         save_action.triggered.connect(self.save_file)
-        toolbar.addAction(save_action)
+        self.file_menu.addAction(save_action)
 
         save_as_action = QAction("Save As", self)
         save_as_action.triggered.connect(self.save_file_as)
-        toolbar.addAction(save_as_action)
+        self.file_menu.addAction(save_as_action)
 
-        toolbar.addSeparator()
+        self.open_recent_menu = self.file_menu.addMenu("Open Recent")
+        self._rebuild_recent_menu()
 
         toggle_bp_action = QAction("Toggle Breakpoint", self)
         toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
-        toolbar.addAction(toggle_bp_action)
+        self.debug_menu.addAction(toggle_bp_action)
 
         break_here_action = QAction("Break Here", self)
         break_here_action.triggered.connect(self.break_here)
-        toolbar.addAction(break_here_action)
+        self.debug_menu.addAction(break_here_action)
 
         conditional_bp_action = QAction("Add Conditional Breakpoint...", self)
         conditional_bp_action.triggered.connect(self.add_conditional_breakpoint)
-        toolbar.addAction(conditional_bp_action)
-
-        toolbar.addSeparator()
+        self.debug_menu.addAction(conditional_bp_action)
 
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)
-        left_layout.addWidget(QLabel("Cheat Sheets"))
 
+        left_header = self._build_panel_header("Cheat Sheets", left_panel)
+        left_layout.addWidget(left_header)
+
+        left_collapse = self._build_panel_collapse_button("Cheat Sheets", left_panel, self._collapse_left_icon)
+        left_layout.addWidget(left_collapse)
+
+        left_content = QWidget()
+        left_content_layout = QVBoxLayout(left_content)
+        left_content_layout.setContentsMargins(0, 0, 0, 0)
         self.cheat_tabs = QTabWidget()
         self.cheat_tabs.addTab(self._build_instruction_tab(), "Instructions")
         self.cheat_tabs.addTab(self._build_syscall_tab(), "Syscalls")
-        left_layout.addWidget(self.cheat_tabs)
+        left_content_layout.addWidget(self.cheat_tabs)
+        left_layout.addWidget(left_content)
         left_panel.setMinimumWidth(220)
+        self.left_panel = left_panel
+        self.left_panel_content = left_content
+        self.left_panel_collapse = left_collapse
 
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
@@ -382,21 +736,36 @@ class MainWindow(QMainWindow):
         register_section = QWidget()
         register_layout = QVBoxLayout(register_section)
         register_layout.setContentsMargins(8, 8, 8, 8)
-        register_layout.addWidget(QLabel("Registers"))
         self.register_table = QTableWidget(len(REGISTER_ORDER), 2)
         self.register_table.setHorizontalHeaderLabels(["Register", "Value"])
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
-        register_layout.addWidget(self.register_table)
-        register_layout.addWidget(QLabel("Flags"))
+        self.register_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        register_flags_row = QHBoxLayout()
+        register_layout.addLayout(register_flags_row)
+        register_panel = QWidget()
+        register_panel_layout = QVBoxLayout(register_panel)
+        register_panel_layout.setContentsMargins(0, 0, 0, 0)
+        register_panel_layout.addWidget(QLabel("Registers"))
+        register_panel_layout.addWidget(self.register_table)
+        register_flags_row.addWidget(register_panel, 2)
+        flags_panel = QWidget()
+        flags_layout = QVBoxLayout(flags_panel)
+        flags_layout.setContentsMargins(0, 0, 0, 0)
+        flags_layout.addWidget(QLabel("Flags"))
         self.flag_table = QTableWidget(len(FLAG_ORDER), 2)
         self.flag_table.setHorizontalHeaderLabels(["Flag", "Value"])
         self.flag_table.verticalHeader().setVisible(False)
         self.flag_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.flag_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.flag_table.setFont(self._default_font())
-        register_layout.addWidget(self.flag_table)
+        self.flag_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+        self.flag_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.flag_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        flags_layout.addWidget(self.flag_table)
+        flags_layout.addStretch()
+        register_flags_row.addWidget(flags_panel, 1, Qt.AlignmentFlag.AlignTop)
 
         stack_section = QWidget()
         stack_layout = QVBoxLayout(stack_section)
@@ -407,6 +776,7 @@ class MainWindow(QMainWindow):
         self.stack_table.verticalHeader().setVisible(False)
         self.stack_table.cellChanged.connect(self.on_stack_edit)
         self.stack_table.setFont(self._default_font())
+        self.stack_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         stack_layout.addWidget(self.stack_table)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -416,44 +786,128 @@ class MainWindow(QMainWindow):
         right_splitter.setStretchFactor(0, 1)
         right_splitter.setStretchFactor(1, 1)
         right_splitter.setMinimumWidth(260)
+        right_splitter.setStyleSheet(
+            "QSplitter::handle { background: #3b3f4a; }"
+            "QSplitter::handle:horizontal { width: 4px; }"
+            "QSplitter::handle:vertical { height: 4px; }"
+        )
         self.right_splitter = right_splitter
+
+        right_panel = QWidget()
+        right_panel_layout = QVBoxLayout(right_panel)
+        right_panel_layout.setContentsMargins(8, 8, 8, 8)
+        right_header = self._build_panel_header("Registers / Stack", right_panel)
+        right_panel_layout.addWidget(right_header)
+        right_collapse = self._build_panel_collapse_button(
+            "Registers / Stack", right_panel, self._collapse_right_icon
+        )
+        right_panel_layout.addWidget(right_collapse)
+        right_panel_layout.addWidget(right_splitter)
+        self.right_panel = right_panel
+        self.right_panel_content = right_splitter
+        self.right_panel_collapse = right_collapse
 
         central_splitter = QSplitter(Qt.Orientation.Horizontal)
         central_splitter.setChildrenCollapsible(False)
         central_splitter.addWidget(left_panel)
         central_splitter.addWidget(center_panel)
-        central_splitter.addWidget(right_splitter)
+        central_splitter.addWidget(right_panel)
         central_splitter.setStretchFactor(0, 1)
         central_splitter.setStretchFactor(1, 3)
         central_splitter.setStretchFactor(2, 1)
         central_splitter.setSizes([240, 720, 320])
+        central_splitter.setStyleSheet(
+            "QSplitter::handle { background: #3b3f4a; }"
+            "QSplitter::handle:horizontal { width: 4px; }"
+            "QSplitter::handle:vertical { height: 4px; }"
+        )
         self.central_splitter = central_splitter
-
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(10, 10, 10, 10)
-        container_layout.addWidget(central_splitter)
-        self.setCentralWidget(container)
+        self._register_pinnable_panel(self.left_panel, self.left_panel_content, self.central_splitter, "Cheat Sheets")
+        self._register_pinnable_panel(self.right_panel, self.right_panel_content, self.central_splitter, "Registers / Stack")
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setFont(self._default_font())
-        log_dock = self._build_output_dock("Log / Output", self.log_output, self.clear_log_output, "LogDock")
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
         self.syscall_output = QPlainTextEdit()
         self.syscall_output.setReadOnly(True)
         self.syscall_output.setFont(self._default_font())
-        syscall_dock = self._build_output_dock("Syscall Output", self.syscall_output, self.clear_syscall_output, "SyscallDock")
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, syscall_dock)
 
         self.extern_output = QPlainTextEdit()
         self.extern_output.setReadOnly(True)
         self.extern_output.setFont(self._default_font())
-        extern_dock = self._build_output_dock("C Function Output", self.extern_output, self.clear_extern_output, "ExternDock")
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, extern_dock)
-        self.tabifyDockWidget(syscall_dock, extern_dock)
-        syscall_dock.raise_()
+
+        log_panel = self._build_output_panel(self.log_output, self.clear_log_output)
+        syscall_panel = self._build_output_panel(self.syscall_output, self.clear_syscall_output)
+        extern_panel = self._build_output_panel(self.extern_output, self.clear_extern_output)
+
+        output_tabs = QTabWidget()
+        output_tabs.addTab(log_panel, "Log / Output")
+        output_tabs.addTab(syscall_panel, "Syscall Output")
+        output_tabs.addTab(extern_panel, "C Function Output")
+
+        output_panel = QWidget()
+        output_layout = QVBoxLayout(output_panel)
+        output_layout.setContentsMargins(8, 8, 8, 8)
+        output_header = self._build_panel_header("Output", output_panel)
+        output_layout.addWidget(output_header)
+        output_collapse = self._build_panel_collapse_button(
+            "Output", output_panel, self._collapse_bottom_icon, "vertical"
+        )
+        output_layout.addWidget(output_collapse)
+        output_layout.addWidget(output_tabs)
+        self.output_panel = output_panel
+        self.output_panel_content = output_tabs
+        self.output_panel_collapse = output_collapse
+
+        main_splitter = QSplitter(Qt.Orientation.Vertical)
+        main_splitter.setChildrenCollapsible(False)
+        main_splitter.addWidget(central_splitter)
+        main_splitter.addWidget(output_panel)
+        main_splitter.setStretchFactor(0, 3)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([720, 220])
+        main_splitter.setStyleSheet(
+            "QSplitter::handle { background: #3b3f4a; }"
+            "QSplitter::handle:horizontal { width: 4px; }"
+            "QSplitter::handle:vertical { height: 4px; }"
+        )
+        self.main_splitter = main_splitter
+        self._register_pinnable_panel(
+            self.output_panel, self.output_panel_content, self.main_splitter, "Output", axis="vertical"
+        )
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(10, 10, 10, 10)
+        container_layout.addWidget(main_splitter)
+        self.setCentralWidget(container)
+
+        left_panel_action = QAction("Cheat Sheets", self)
+        left_panel_action.setCheckable(True)
+        left_panel_action.setChecked(True)
+        left_panel_action.toggled.connect(self.left_panel.setVisible)
+        left_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.left_panel, visible))
+        self.view_menu.addAction(left_panel_action)
+        self._panel_view_actions[self.left_panel] = left_panel_action
+
+        right_panel_action = QAction("Registers / Stack", self)
+        right_panel_action.setCheckable(True)
+        right_panel_action.setChecked(True)
+        right_panel_action.toggled.connect(self.right_panel.setVisible)
+        right_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.right_panel, visible))
+        self.view_menu.addAction(right_panel_action)
+        self._panel_view_actions[self.right_panel] = right_panel_action
+
+        output_panel_action = QAction("Output", self)
+        output_panel_action.setCheckable(True)
+        output_panel_action.setChecked(True)
+        output_panel_action.toggled.connect(self.output_panel.setVisible)
+        output_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.output_panel, visible))
+        self.view_menu.addAction(output_panel_action)
+        self._panel_view_actions[self.output_panel] = output_panel_action
+
+        self.view_menu.addSeparator()
 
         self.symbol_table = QTableWidget(0, 3)
         self.symbol_table.setHorizontalHeaderLabels(["Symbol", "Kind", "Address/Info"])
@@ -461,10 +915,14 @@ class MainWindow(QMainWindow):
         self.symbol_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.symbol_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.symbol_table.setFont(self._default_font())
+        self.symbol_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         symbol_dock = QDockWidget("Symbols", self)
         symbol_dock.setObjectName("SymbolsDock")
         symbol_dock.setWidget(self.symbol_table)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, symbol_dock)
+        symbol_dock_action = symbol_dock.toggleViewAction()
+        symbol_dock_action.setText("Symbols")
+        self.view_menu.addAction(symbol_dock_action)
 
         self.memory_base = QLineEdit()
         self.memory_base.setPlaceholderText("0x00000000")
@@ -481,6 +939,10 @@ class MainWindow(QMainWindow):
         self.memory_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.memory_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.memory_table.setFont(self._default_font())
+        memory_header = self.memory_table.horizontalHeader()
+        memory_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        memory_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        memory_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
         memory_controls = QWidget()
         memory_layout = QHBoxLayout(memory_controls)
@@ -500,6 +962,9 @@ class MainWindow(QMainWindow):
         memory_dock.setObjectName("MemoryDock")
         memory_dock.setWidget(memory_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, memory_dock)
+        memory_dock_action = memory_dock.toggleViewAction()
+        memory_dock_action.setText("Memory View")
+        self.view_menu.addAction(memory_dock_action)
 
         self.breakpoints_model = BreakpointsTableModel(self.breakpoint_manager)
         self.breakpoints_view = QTableView()
@@ -516,6 +981,9 @@ class MainWindow(QMainWindow):
         breakpoints_dock.setWidget(self.breakpoints_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, breakpoints_dock)
         self.breakpoints_dock = breakpoints_dock
+        breakpoints_dock_action = breakpoints_dock.toggleViewAction()
+        breakpoints_dock_action.setText("Breakpoints")
+        self.view_menu.addAction(breakpoints_dock_action)
 
         status = QStatusBar()
         self.setStatusBar(status)
@@ -528,11 +996,8 @@ class MainWindow(QMainWindow):
         self._apply_dracula_theme()
         self.breakpoint_manager.changed.connect(self._on_breakpoints_changed)
 
-        breakpoints_toggle_action = self.breakpoints_dock.toggleViewAction()
-        breakpoints_toggle_action.setText("Breakpoints")
-        self.toolbar.addAction(breakpoints_toggle_action)
 
-    def _build_output_dock(self, title: str, text_edit: QPlainTextEdit, clear_handler, object_name: str) -> QDockWidget:
+    def _build_output_panel(self, text_edit: QPlainTextEdit, clear_handler) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -548,11 +1013,7 @@ class MainWindow(QMainWindow):
         controls.addWidget(clear_button)
         layout.addLayout(controls)
         layout.addWidget(text_edit)
-
-        dock = QDockWidget(title, self)
-        dock.setObjectName(object_name)
-        dock.setWidget(container)
-        return dock
+        return container
 
     def _build_center_controls(self) -> QWidget:
         widget = QWidget()
@@ -640,10 +1101,19 @@ class MainWindow(QMainWindow):
             state = data.get("state")
             if state:
                 self.restoreState(bytes.fromhex(state))
-            if "central_sizes" in data and hasattr(self, "central_splitter"):
-                self.central_splitter.setSizes(data.get("central_sizes", []))
-            if "right_sizes" in data and hasattr(self, "right_splitter"):
-                self.right_splitter.setSizes(data.get("right_sizes", []))
+            central_sizes = data.get("central_sizes")
+            if central_sizes and hasattr(self, "central_splitter"):
+                QTimer.singleShot(0, lambda sizes=list(central_sizes): self.central_splitter.setSizes(sizes))
+            main_sizes = data.get("main_sizes")
+            if main_sizes and hasattr(self, "main_splitter"):
+                QTimer.singleShot(0, lambda sizes=list(main_sizes): self.main_splitter.setSizes(sizes))
+            right_sizes = data.get("right_sizes")
+            if right_sizes and hasattr(self, "right_splitter"):
+                QTimer.singleShot(0, lambda sizes=list(right_sizes): self.right_splitter.setSizes(sizes))
+            pinned = data.get("pinned_panels", {})
+            if isinstance(pinned, dict):
+                self._pending_pinned_state = {str(k): bool(v) for k, v in pinned.items()}
+                QTimer.singleShot(0, self._apply_pinned_state)
             mode_index = data.get("mode_index")
             if mode_index is not None:
                 self.mode_select.setCurrentIndex(int(mode_index))
@@ -656,8 +1126,25 @@ class MainWindow(QMainWindow):
             mem_rows = data.get("memory_rows")
             if mem_rows:
                 self.memory_rows.setValue(int(mem_rows))
+            recent = data.get("recent_files", [])
+            if isinstance(recent, list):
+                self.recent_files = [path for path in recent if isinstance(path, str)]
+                self._rebuild_recent_menu()
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+
+    def _apply_pinned_state(self) -> None:
+        if not self._pending_pinned_state:
+            return
+        for panel, name in self._panel_names.items():
+            if name in self._pending_pinned_state:
+                pinned = self._pending_pinned_state[name]
+                self._set_panel_pinned(panel, pinned)
+                if not pinned and panel.isVisible():
+                    self._collapse_panel(panel)
+        self._pending_pinned_state = None
+        if hasattr(self, "editor"):
+            self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _save_layout(self) -> None:
         data = {}
@@ -665,12 +1152,16 @@ class MainWindow(QMainWindow):
         data["state"] = self.saveState().toHex().data().decode("ascii")
         if hasattr(self, "central_splitter"):
             data["central_sizes"] = self.central_splitter.sizes()
+        if hasattr(self, "main_splitter"):
+            data["main_sizes"] = self.main_splitter.sizes()
         if hasattr(self, "right_splitter"):
             data["right_sizes"] = self.right_splitter.sizes()
         data["mode_index"] = self.mode_select.currentIndex()
         data["rate"] = self.rate_spin.value()
         data["memory_base"] = self.memory_base.text()
         data["memory_rows"] = self.memory_rows.value()
+        data["recent_files"] = self.recent_files
+        data["pinned_panels"] = {name: self._pinnable_panels.get(panel, True) for panel, name in self._panel_names.items()}
         try:
             with open(self._config_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -899,6 +1390,10 @@ class MainWindow(QMainWindow):
         self.cheat_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.cheat_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cheat_table.setFont(self._default_font())
+        cheat_header = self.cheat_table.horizontalHeader()
+        for col in (0, 1, 3, 4):
+            cheat_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        cheat_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.cheat_table)
         self._populate_cheat_sheet()
         return widget
@@ -920,6 +1415,10 @@ class MainWindow(QMainWindow):
         self.syscall_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.syscall_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.syscall_table.setFont(self._default_font())
+        syscall_header = self.syscall_table.horizontalHeader()
+        for col in (0, 1, 3, 4):
+            syscall_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        syscall_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.syscall_table)
         self._populate_syscall_sheet()
         return widget
@@ -978,6 +1477,7 @@ class MainWindow(QMainWindow):
             self._set_current_file(path)
             self.source_dirty = True
             self.log(f"Opened {path}")
+            self._add_recent_file(path)
             return True
         except OSError as exc:
             QMessageBox.warning(self, "Open Failed", str(exc))
@@ -1015,6 +1515,7 @@ class MainWindow(QMainWindow):
                 file.write(self.editor.toPlainText())
             self.source_dirty = False
             self.log(f"Saved {self.current_file}")
+            self._add_recent_file(self.current_file)
         except OSError as exc:
             QMessageBox.warning(self, "Save Failed", str(exc))
 
@@ -1165,9 +1666,20 @@ class MainWindow(QMainWindow):
         self.log("CPU state reset.")
 
     def ensure_program(self) -> bool:
+        if not self._autosave_if_needed():
+            return False
         if self.source_dirty or not self.program.instructions:
             return self.parse_current_program()
         return True
+
+    def _autosave_if_needed(self) -> bool:
+        if not self.source_dirty:
+            return True
+        if self.current_file:
+            self.save_file()
+        else:
+            self.save_file_as()
+        return not self.source_dirty
 
     def _update_timer_interval(self) -> None:
         steps = self.rate_spin.value()
@@ -1217,6 +1729,15 @@ class MainWindow(QMainWindow):
             value_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.flag_table.setItem(row, 1, value_item)
         self.flag_table.resizeColumnsToContents()
+        self._resize_flag_table()
+
+    def _resize_flag_table(self) -> None:
+        self.flag_table.resizeRowsToContents()
+        total_height = self.flag_table.horizontalHeader().height()
+        for row in range(self.flag_table.rowCount()):
+            total_height += self.flag_table.rowHeight(row)
+        total_height += self.flag_table.frameWidth() * 2
+        self.flag_table.setFixedHeight(total_height)
 
     def _update_stack_view(self) -> None:
         esp = self.cpu.get_reg("ESP")
