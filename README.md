@@ -1,6 +1,6 @@
 # ASM Debugger
 
-![Release workflow status](https://github.com/dsquad/py-asm-debugger/actions/workflows/release.yml/badge.svg)
+![Release workflow status](https://github.com/Dyronix/py-asm-debugger/actions/workflows/release.yml/badge.svg?tag=v1.0.0)
 
 A simple x86 (Intel syntax) assembly editor and step debugger built with PyQt6.
 
