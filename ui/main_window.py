@@ -1816,7 +1816,6 @@ class MainWindow(QMainWindow):
             self.symbol_table.setItem(row, 0, QTableWidgetItem(name))
             self.symbol_table.setItem(row, 1, QTableWidgetItem(kind))
             self.symbol_table.setItem(row, 2, QTableWidgetItem(info))
-        self.symbol_table.resizeColumnsToContents()
 
     def _update_memory_view(self) -> None:
         try:
