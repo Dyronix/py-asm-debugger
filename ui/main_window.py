@@ -110,13 +110,20 @@ class AsmHighlighter(QSyntaxHighlighter):
 
         parts = text.strip().split(None, 1)
         if parts:
-            mnemonic = parts[0]
-            if self.syntax == "att" and len(mnemonic) > 1 and mnemonic[-1].lower() in {"b", "w", "l"}:
-                mnemonic = mnemonic[:-1]
-            mnemonic = mnemonic.upper()
-            if mnemonic in self.mnemonics:
-                start = text.upper().find(mnemonic)
-                self.setFormat(start, len(mnemonic), self.mnemonic_format)
+            orig_mnemonic = parts[0]
+            mnemonic_for_lookup = orig_mnemonic
+            if (
+                self.syntax == "att"
+                and len(mnemonic_for_lookup) > 1
+                and mnemonic_for_lookup[-1].lower() in {"b", "w", "l"}
+            ):
+                mnemonic_for_lookup = mnemonic_for_lookup[:-1]
+            lookup_upper = mnemonic_for_lookup.upper()
+            if lookup_upper in self.mnemonics:
+                text_upper = text.upper()
+                start = text_upper.find(orig_mnemonic.upper())
+                if start >= 0:
+                    self.setFormat(start, len(orig_mnemonic), self.mnemonic_format)
 
         tokens = [tok.strip(" ,") for tok in text.replace(",", " ").split()]
         for tok in tokens:
