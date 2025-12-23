@@ -679,6 +679,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.file_menu = self.menuBar().addMenu("File")
+        self.edit_menu = self.menuBar().addMenu("Edit")
         self.debug_menu = self.menuBar().addMenu("Debug")
         self.view_menu = self.menuBar().addMenu("View")
 
@@ -701,17 +702,17 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         self.file_menu.addAction(save_as_action)
 
-        load_cheat_sheet_action = QAction("Load Cheat Sheet...", self)
-        load_cheat_sheet_action.triggered.connect(self.load_cheat_sheet)
-        self.file_menu.addAction(load_cheat_sheet_action)
-
-        reload_cheat_sheet_action = QAction("Reload Cheat Sheet", self)
-        reload_cheat_sheet_action.triggered.connect(self.reload_cheat_sheet)
-        self.file_menu.addAction(reload_cheat_sheet_action)
-
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         self.file_menu.addAction(exit_action)
+
+        load_cheat_sheet_action = QAction("Load Cheat Sheet...", self)
+        load_cheat_sheet_action.triggered.connect(self.load_cheat_sheet)
+        self.edit_menu.addAction(load_cheat_sheet_action)
+
+        reload_cheat_sheet_action = QAction("Reload Cheat Sheet", self)
+        reload_cheat_sheet_action.triggered.connect(self.reload_cheat_sheet)
+        self.edit_menu.addAction(reload_cheat_sheet_action)
 
         toggle_bp_action = QAction("Toggle Breakpoint", self)
         toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
