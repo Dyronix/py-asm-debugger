@@ -1214,7 +1214,6 @@ class MainWindow(QMainWindow):
         try:
             with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
                 json.dump(self.breakpoint_manager.to_json(), f, indent=2)
-        except OSError:
         except OSError as e:
             # If we cannot save the breakpoints (e.g. due to a permissions issue or
             # disk error), ignore the failure. This only affects persistence across
