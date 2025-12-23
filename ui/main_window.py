@@ -51,7 +51,7 @@ from PyQt6.QtWidgets import (
 
 from core.cpu import CPUState, REGISTER_ORDER, clamp_u32
 from core.emulator import Emulator, StepOutcome
-from core.instructions import EmulationError, get_instruction_defs
+from core.instructions import get_instruction_defs
 from core.model import Program
 from core.parser import ParseError, parse_assembly
 from core.syscalls import get_syscall_defs
@@ -671,6 +671,9 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.open_file)
         self.file_menu.addAction(open_action)
 
+        self.open_recent_menu = self.file_menu.addMenu("Open Recent")
+        self._rebuild_recent_menu()
+
         save_action = QAction("Save", self)
         save_action.triggered.connect(self.save_file)
         self.file_menu.addAction(save_action)
@@ -679,8 +682,9 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         self.file_menu.addAction(save_as_action)
 
-        self.open_recent_menu = self.file_menu.addMenu("Open Recent")
-        self._rebuild_recent_menu()
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        self.file_menu.addAction(exit_action)
 
         toggle_bp_action = QAction("Toggle Breakpoint", self)
         toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
@@ -736,12 +740,15 @@ class MainWindow(QMainWindow):
         register_section = QWidget()
         register_layout = QVBoxLayout(register_section)
         register_layout.setContentsMargins(8, 8, 8, 8)
-        self.register_table = QTableWidget(len(REGISTER_ORDER), 2)
-        self.register_table.setHorizontalHeaderLabels(["Register", "Value"])
+        self.register_table = QTableWidget(len(REGISTER_ORDER), 4)
+        self.register_table.setHorizontalHeaderLabels(["Register", "Hex", "Dec", "ASCII"])
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
-        self.register_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        register_header = self.register_table.horizontalHeader()
+        register_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        register_header.setStretchLastSection(True)
+        self.register_table.setColumnHidden(3, True)
         register_flags_row = QHBoxLayout()
         register_layout.addLayout(register_flags_row)
         register_panel = QWidget()
@@ -762,7 +769,9 @@ class MainWindow(QMainWindow):
         self.flag_table.setFont(self._default_font())
         self.flag_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         self.flag_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.flag_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        flag_header = self.flag_table.horizontalHeader()
+        flag_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        flag_header.setStretchLastSection(True)
         flags_layout.addWidget(self.flag_table)
         flags_layout.addStretch()
         register_flags_row.addWidget(flags_panel, 1, Qt.AlignmentFlag.AlignTop)
@@ -771,12 +780,15 @@ class MainWindow(QMainWindow):
         stack_layout = QVBoxLayout(stack_section)
         stack_layout.setContentsMargins(8, 8, 8, 8)
         stack_layout.addWidget(QLabel("Stack"))
-        self.stack_table = QTableWidget(16, 3)
-        self.stack_table.setHorizontalHeaderLabels(["Address", "Value", "Markers"])
+        self.stack_table = QTableWidget(16, 5)
+        self.stack_table.setHorizontalHeaderLabels(["Address", "Hex", "Dec", "ASCII", "Markers"])
         self.stack_table.verticalHeader().setVisible(False)
         self.stack_table.cellChanged.connect(self.on_stack_edit)
         self.stack_table.setFont(self._default_font())
-        self.stack_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        stack_header = self.stack_table.horizontalHeader()
+        stack_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        stack_header.setStretchLastSection(True)
+        self.stack_table.setColumnHidden(3, True)
         stack_layout.addWidget(self.stack_table)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -906,6 +918,11 @@ class MainWindow(QMainWindow):
         output_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.output_panel, visible))
         self.view_menu.addAction(output_panel_action)
         self._panel_view_actions[self.output_panel] = output_panel_action
+        self.ascii_columns_action = QAction("Show Dec/ASCII Columns", self)
+        self.ascii_columns_action.setCheckable(True)
+        self.ascii_columns_action.setChecked(False)
+        self.ascii_columns_action.toggled.connect(self._set_ascii_columns_visible)
+        self.view_menu.addAction(self.ascii_columns_action)
 
         self.view_menu.addSeparator()
 
@@ -915,7 +932,9 @@ class MainWindow(QMainWindow):
         self.symbol_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.symbol_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.symbol_table.setFont(self._default_font())
-        self.symbol_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        symbol_header = self.symbol_table.horizontalHeader()
+        symbol_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        symbol_header.setStretchLastSection(True)
         symbol_dock = QDockWidget("Symbols", self)
         symbol_dock.setObjectName("SymbolsDock")
         symbol_dock.setWidget(self.symbol_table)
@@ -940,9 +959,10 @@ class MainWindow(QMainWindow):
         self.memory_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.memory_table.setFont(self._default_font())
         memory_header = self.memory_table.horizontalHeader()
-        memory_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        memory_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        memory_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        memory_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        memory_header.setStretchLastSection(True)
+        self.memory_table.setColumnHidden(2, True)
+        self._update_memory_column_modes(ascii_visible=False)
 
         memory_controls = QWidget()
         memory_layout = QHBoxLayout(memory_controls)
@@ -1038,7 +1058,7 @@ class MainWindow(QMainWindow):
         self.reset_button.clicked.connect(self.reset_state)
 
         self.play_button.setToolTip("Play (F5)")
-        self.pause_button.setToolTip("Pause (F9)")
+        self.pause_button.setToolTip("Pause (Shift+F5)")
         self.step_button.setToolTip("Step (F10)")
         self.reset_button.setToolTip("Reset (Ctrl+Shift+F5)")
 
@@ -1137,6 +1157,9 @@ class MainWindow(QMainWindow):
                 self.recent_files = [path for path in recent if isinstance(path, str)]
                 self._rebuild_recent_menu()
         except (OSError, ValueError, json.JSONDecodeError):
+            # If the layout file is unreadable, malformed, or otherwise invalid, ignore the
+            # error and continue with the default window layout. Missing files are handled
+            # earlier by falling back to the default layout path.
             pass
 
     def _apply_pinned_state(self) -> None:
@@ -1172,6 +1195,7 @@ class MainWindow(QMainWindow):
             with open(self._config_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except OSError:
+            # Silently ignore errors when saving layout - non-critical operation
             pass
 
     def _load_breakpoints(self) -> None:
@@ -1183,14 +1207,18 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
             self.breakpoint_manager.load_json(data)
         except (OSError, ValueError, json.JSONDecodeError):
+            # Silently ignore errors when loading breakpoints - start with empty state if file is corrupted or missing
             pass
 
     def _save_breakpoints(self) -> None:
         try:
             with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
                 json.dump(self.breakpoint_manager.to_json(), f, indent=2)
-        except OSError:
-            pass
+        except OSError as e:
+            # If we cannot save the breakpoints (e.g. due to a permissions issue or
+            # disk error), ignore the failure. This only affects persistence across
+            # application restarts and does not impact the current debugging session.
+            print(f"Warning: failed to save breakpoints: {e}")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_layout()
@@ -1264,7 +1292,6 @@ class MainWindow(QMainWindow):
             self.cheat_table.setItem(row, 2, QTableWidgetItem(defn.description))
             self.cheat_table.setItem(row, 3, QTableWidgetItem(defn.syntax))
             self.cheat_table.setItem(row, 4, QTableWidgetItem(defn.flags))
-        self.cheat_table.resizeColumnsToContents()
 
     def filter_cheat_sheet(self, text: str) -> None:
         query = text.strip().lower()
@@ -1287,7 +1314,6 @@ class MainWindow(QMainWindow):
             self.syscall_table.setItem(row, 2, QTableWidgetItem(defn.description))
             self.syscall_table.setItem(row, 3, QTableWidgetItem(defn.args))
             self.syscall_table.setItem(row, 4, QTableWidgetItem(defn.returns))
-        self.syscall_table.resizeColumnsToContents()
 
     def filter_syscall_sheet(self, text: str) -> None:
         query = text.strip().lower()
@@ -1404,9 +1430,8 @@ class MainWindow(QMainWindow):
         self.cheat_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cheat_table.setFont(self._default_font())
         cheat_header = self.cheat_table.horizontalHeader()
-        for col in (0, 1, 3, 4):
-            cheat_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        cheat_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        cheat_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        cheat_header.setStretchLastSection(True)
         layout.addWidget(self.cheat_table)
         self._populate_cheat_sheet()
         return widget
@@ -1429,9 +1454,8 @@ class MainWindow(QMainWindow):
         self.syscall_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.syscall_table.setFont(self._default_font())
         syscall_header = self.syscall_table.horizontalHeader()
-        for col in (0, 1, 3, 4):
-            syscall_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        syscall_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        syscall_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        syscall_header.setStretchLastSection(True)
         layout.addWidget(self.syscall_table)
         self._populate_syscall_sheet()
         return widget
@@ -1722,6 +1746,7 @@ class MainWindow(QMainWindow):
             self.updating_views = False
 
     def _update_register_view(self) -> None:
+        ascii_visible = not self.register_table.isColumnHidden(3)
         for row, reg in enumerate(REGISTER_ORDER):
             name_item = QTableWidgetItem(reg)
             name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1730,12 +1755,23 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem(f"0x{value:08X}")
             value_item.setData(Qt.ItemDataRole.UserRole, reg)
             value_item.setToolTip(str(value))
+            dec_item = QTableWidgetItem(str(value))
+            dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             prev_value = self.prev_registers.get(reg)
             if prev_value is not None and prev_value != value:
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
+                dec_item.setBackground(QColor("#ffb86c"))
+                dec_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
-        self.register_table.resizeColumnsToContents()
+            self.register_table.setItem(row, 2, dec_item)
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(QColor("#ffb86c"))
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.register_table.setItem(row, 3, ascii_item)
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_flag_view(self) -> None:
@@ -1747,7 +1783,6 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem(str(value))
             value_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.flag_table.setItem(row, 1, value_item)
-        self.flag_table.resizeColumnsToContents()
         self._resize_flag_table()
 
     def _resize_flag_table(self) -> None:
@@ -1763,6 +1798,7 @@ class MainWindow(QMainWindow):
         ebp = self.cpu.get_reg("EBP")
         base = clamp_u32(esp - 32)
         rows = self.stack_table.rowCount()
+        ascii_visible = not self.stack_table.isColumnHidden(3)
         for i in range(rows):
             addr = clamp_u32(base + i * 4)
             value = self.cpu.read_mem(addr, 4)
@@ -1770,6 +1806,8 @@ class MainWindow(QMainWindow):
             addr_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             value_item = QTableWidgetItem(f"0x{value:08X}")
             value_item.setData(Qt.ItemDataRole.UserRole, addr)
+            dec_item = QTableWidgetItem(str(value))
+            dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             marker_text = []
             if addr == esp:
                 marker_text.append("ESP")
@@ -1779,18 +1817,30 @@ class MainWindow(QMainWindow):
             marker_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.stack_table.setItem(i, 0, addr_item)
             self.stack_table.setItem(i, 1, value_item)
-            self.stack_table.setItem(i, 2, marker_item)
+            self.stack_table.setItem(i, 2, dec_item)
+            self.stack_table.setItem(i, 4, marker_item)
             if addr == esp:
                 highlight = QColor("#f286c4")
                 addr_item.setBackground(highlight)
                 value_item.setBackground(highlight)
+                dec_item.setBackground(highlight)
                 marker_item.setBackground(highlight)
             prev_value = self.prev_stack_values.get(addr)
             if prev_value is not None and prev_value != value:
                 change_bg = QColor("#ffb86c")
                 value_item.setBackground(change_bg)
                 value_item.setForeground(QColor("#1a1b26"))
-        self.stack_table.resizeColumnsToContents()
+                dec_item.setBackground(change_bg)
+                dec_item.setForeground(QColor("#1a1b26"))
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if addr == esp:
+                    ascii_item.setBackground(highlight)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(change_bg)
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.stack_table.setItem(i, 3, ascii_item)
         self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
@@ -1815,7 +1865,6 @@ class MainWindow(QMainWindow):
             self.symbol_table.setItem(row, 0, QTableWidgetItem(name))
             self.symbol_table.setItem(row, 1, QTableWidgetItem(kind))
             self.symbol_table.setItem(row, 2, QTableWidgetItem(info))
-        self.symbol_table.resizeColumnsToContents()
 
     def _update_memory_view(self) -> None:
         try:
@@ -1832,9 +1881,12 @@ class MainWindow(QMainWindow):
             hex_bytes = " ".join(f"{b:02X}" for b in data)
             ascii_text = "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
             self.memory_table.setItem(row, 0, QTableWidgetItem(f"0x{addr:08X}"))
-            self.memory_table.setItem(row, 1, QTableWidgetItem(hex_bytes))
+            hex_item = QTableWidgetItem(hex_bytes)
+            # Center alignment prevents hex data from appearing squished to the right
+            # when the ASCII column is hidden
+            hex_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.memory_table.setItem(row, 1, hex_item)
             self.memory_table.setItem(row, 2, QTableWidgetItem(ascii_text))
-        self.memory_table.resizeColumnsToContents()
 
     def _highlight_current_line(self) -> None:
         selections = []
@@ -1906,6 +1958,48 @@ class MainWindow(QMainWindow):
         self.cpu.write_mem(int(addr), 4, value)
         self._update_stack_view()
 
+    def _format_ascii_dword(self, value: int) -> str:
+        # Interpret the 32-bit value's raw in-memory bytes (little-endian) as
+        # printable ASCII characters, replacing non-printables with '.'.
+        # This matches the x86 target of this debugger and shows the byte
+        # representation of the dword, not an interpreted ASCII string.
+        data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
+        return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
+
+    def _set_ascii_columns_visible(self, visible: bool) -> None:
+        if hasattr(self, "register_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for registers
+            self.register_table.setColumnHidden(2, not visible)
+            self.register_table.setColumnHidden(3, not visible)
+        if hasattr(self, "stack_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for the stack
+            self.stack_table.setColumnHidden(2, not visible)
+            self.stack_table.setColumnHidden(3, not visible)
+        if hasattr(self, "memory_table"):
+            # Memory table has only one extra column: ASCII at index 2
+            self.memory_table.setColumnHidden(2, not visible)
+            self._update_memory_column_modes(ascii_visible=visible)
+        # Refresh all views so newly visible columns are immediately populated
+        self._update_views()
+
+    def _update_memory_column_modes(self, ascii_visible: bool) -> None:
+        if not hasattr(self, "memory_table"):
+            return
+        header = self.memory_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        if not ascii_visible:
+            QTimer.singleShot(0, self._expand_memory_hex_column)
+
+    def _expand_memory_hex_column(self) -> None:
+        if not hasattr(self, "memory_table"):
+            return
+        if not self.memory_table.isColumnHidden(2):
+            return
+        available = self.memory_table.viewport().width()
+        address_width = self.memory_table.columnWidth(0)
+        target = max(120, available - address_width - 6)
+        self.memory_table.setColumnWidth(1, target)
     def _parse_value(self, text: str) -> int:
         raw = text.strip()
         if raw.lower().startswith("0x"):
