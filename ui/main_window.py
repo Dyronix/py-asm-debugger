@@ -1961,10 +1961,6 @@ class MainWindow(QMainWindow):
 
     def _set_ascii_columns_visible(self, visible: bool) -> None:
         if hasattr(self, "register_table"):
-            self.register_table.setColumnHidden(3, not visible)
-            if visible:
-                self._update_register_view()
-        if hasattr(self, "register_table"):
             # Hide both Dec (2) and ASCII (3) columns together for registers
             self.register_table.setColumnHidden(2, not visible)
             self.register_table.setColumnHidden(3, not visible)
