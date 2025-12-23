@@ -955,6 +955,7 @@ class MainWindow(QMainWindow):
         memory_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         memory_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.memory_table.setColumnHidden(2, True)
+        self._update_memory_column_modes(ascii_visible=False)
 
         memory_controls = QWidget()
         memory_layout = QHBoxLayout(memory_controls)
@@ -1948,6 +1949,26 @@ class MainWindow(QMainWindow):
             self.stack_table.setColumnHidden(3, not visible)
         if hasattr(self, "memory_table"):
             self.memory_table.setColumnHidden(2, not visible)
+            self._update_memory_column_modes(ascii_visible=visible)
+
+    def _update_memory_column_modes(self, ascii_visible: bool) -> None:
+        if not hasattr(self, "memory_table"):
+            return
+        header = self.memory_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        if not ascii_visible:
+            QTimer.singleShot(0, self._expand_memory_hex_column)
+
+    def _expand_memory_hex_column(self) -> None:
+        if not hasattr(self, "memory_table"):
+            return
+        if not self.memory_table.isColumnHidden(2):
+            return
+        available = self.memory_table.viewport().width()
+        address_width = self.memory_table.columnWidth(0)
+        target = max(120, available - address_width - 6)
+        self.memory_table.setColumnWidth(1, target)
     def _parse_value(self, text: str) -> int:
         raw = text.strip()
         if raw.lower().startswith("0x"):
