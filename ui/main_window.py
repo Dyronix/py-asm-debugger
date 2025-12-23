@@ -1095,7 +1095,7 @@ class MainWindow(QMainWindow):
         self.reset_button.clicked.connect(self.reset_state)
 
         self.play_button.setToolTip("Play (F5)")
-        self.pause_button.setToolTip("Pause (F9)")
+        self.pause_button.setToolTip("Pause (Shift+F5)")
         self.step_button.setToolTip("Step (F10)")
         self.reset_button.setToolTip("Reset (Ctrl+Shift+F5)")
 
@@ -1194,6 +1194,9 @@ class MainWindow(QMainWindow):
                 self.recent_files = [path for path in recent if isinstance(path, str)]
                 self._rebuild_recent_menu()
         except (OSError, ValueError, json.JSONDecodeError):
+            # If the layout file is unreadable, malformed, or otherwise invalid, ignore the
+            # error and continue with the default window layout. Missing files are handled
+            # earlier by falling back to the default layout path.
             pass
 
     def _apply_pinned_state(self) -> None:
@@ -1229,6 +1232,7 @@ class MainWindow(QMainWindow):
             with open(self._config_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except OSError:
+            # Silently ignore errors when saving layout - non-critical operation
             pass
 
     def _load_breakpoints(self) -> None:
@@ -1240,14 +1244,18 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
             self.breakpoint_manager.load_json(data)
         except (OSError, ValueError, json.JSONDecodeError):
+            # Silently ignore errors when loading breakpoints - start with empty state if file is corrupted or missing
             pass
 
     def _save_breakpoints(self) -> None:
         try:
             with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
                 json.dump(self.breakpoint_manager.to_json(), f, indent=2)
-        except OSError:
-            pass
+        except OSError as e:
+            # If we cannot save the breakpoints (e.g. due to a permissions issue or
+            # disk error), ignore the failure. This only affects persistence across
+            # application restarts and does not impact the current debugging session.
+            print(f"Warning: failed to save breakpoints: {e}")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_layout()
@@ -1812,6 +1820,7 @@ class MainWindow(QMainWindow):
             self.updating_views = False
 
     def _update_register_view(self) -> None:
+        ascii_visible = not self.register_table.isColumnHidden(3)
         for row, reg in enumerate(REGISTER_ORDER):
             name_item = QTableWidgetItem(reg)
             name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1822,19 +1831,21 @@ class MainWindow(QMainWindow):
             value_item.setToolTip(str(value))
             dec_item = QTableWidgetItem(str(value))
             dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
-            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             prev_value = self.prev_registers.get(reg)
             if prev_value is not None and prev_value != value:
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
                 dec_item.setBackground(QColor("#ffb86c"))
                 dec_item.setForeground(QColor("#1a1b26"))
-                ascii_item.setBackground(QColor("#ffb86c"))
-                ascii_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
             self.register_table.setItem(row, 2, dec_item)
-            self.register_table.setItem(row, 3, ascii_item)
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(QColor("#ffb86c"))
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.register_table.setItem(row, 3, ascii_item)
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_flag_view(self) -> None:
@@ -1861,6 +1872,7 @@ class MainWindow(QMainWindow):
         ebp = self.cpu.get_reg("EBP")
         base = clamp_u32(esp - 32)
         rows = self.stack_table.rowCount()
+        ascii_visible = not self.stack_table.isColumnHidden(3)
         for i in range(rows):
             addr = clamp_u32(base + i * 4)
             value = self.cpu.read_mem(addr, 4)
@@ -1870,8 +1882,6 @@ class MainWindow(QMainWindow):
             value_item.setData(Qt.ItemDataRole.UserRole, addr)
             dec_item = QTableWidgetItem(str(value))
             dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
-            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             marker_text = []
             if addr == esp:
                 marker_text.append("ESP")
@@ -1882,14 +1892,12 @@ class MainWindow(QMainWindow):
             self.stack_table.setItem(i, 0, addr_item)
             self.stack_table.setItem(i, 1, value_item)
             self.stack_table.setItem(i, 2, dec_item)
-            self.stack_table.setItem(i, 3, ascii_item)
             self.stack_table.setItem(i, 4, marker_item)
             if addr == esp:
                 highlight = QColor("#f286c4")
                 addr_item.setBackground(highlight)
                 value_item.setBackground(highlight)
                 dec_item.setBackground(highlight)
-                ascii_item.setBackground(highlight)
                 marker_item.setBackground(highlight)
             prev_value = self.prev_stack_values.get(addr)
             if prev_value is not None and prev_value != value:
@@ -1898,8 +1906,15 @@ class MainWindow(QMainWindow):
                 value_item.setForeground(QColor("#1a1b26"))
                 dec_item.setBackground(change_bg)
                 dec_item.setForeground(QColor("#1a1b26"))
-                ascii_item.setBackground(change_bg)
-                ascii_item.setForeground(QColor("#1a1b26"))
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if addr == esp:
+                    ascii_item.setBackground(highlight)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(change_bg)
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.stack_table.setItem(i, 3, ascii_item)
         self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
@@ -1941,6 +1956,8 @@ class MainWindow(QMainWindow):
             ascii_text = "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
             self.memory_table.setItem(row, 0, QTableWidgetItem(f"0x{addr:08X}"))
             hex_item = QTableWidgetItem(hex_bytes)
+            # Center alignment prevents hex data from appearing squished to the right
+            # when the ASCII column is hidden
             hex_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             self.memory_table.setItem(row, 1, hex_item)
             self.memory_table.setItem(row, 2, QTableWidgetItem(ascii_text))
@@ -2015,19 +2032,29 @@ class MainWindow(QMainWindow):
         self.cpu.write_mem(int(addr), 4, value)
         self._update_stack_view()
 
-
     def _format_ascii_dword(self, value: int) -> str:
+        # Interpret the 32-bit value's raw in-memory bytes (little-endian) as
+        # printable ASCII characters, replacing non-printables with '.'.
+        # This matches the x86 target of this debugger and shows the byte
+        # representation of the dword, not an interpreted ASCII string.
         data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
         return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
 
     def _set_ascii_columns_visible(self, visible: bool) -> None:
         if hasattr(self, "register_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for registers
+            self.register_table.setColumnHidden(2, not visible)
             self.register_table.setColumnHidden(3, not visible)
         if hasattr(self, "stack_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for the stack
+            self.stack_table.setColumnHidden(2, not visible)
             self.stack_table.setColumnHidden(3, not visible)
         if hasattr(self, "memory_table"):
+            # Memory table has only one extra column: ASCII at index 2
             self.memory_table.setColumnHidden(2, not visible)
             self._update_memory_column_modes(ascii_visible=visible)
+        # Refresh all views so newly visible columns are immediately populated
+        self._update_views()
 
     def _update_memory_column_modes(self, ascii_visible: bool) -> None:
         if not hasattr(self, "memory_table"):
