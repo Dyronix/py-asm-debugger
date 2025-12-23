@@ -1941,7 +1941,6 @@ class MainWindow(QMainWindow):
         self.cpu.write_mem(int(addr), 4, value)
         self._update_stack_view()
 
-
     def _format_ascii_dword(self, value: int) -> str:
         data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
         return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
