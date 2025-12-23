@@ -918,11 +918,11 @@ class MainWindow(QMainWindow):
         output_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.output_panel, visible))
         self.view_menu.addAction(output_panel_action)
         self._panel_view_actions[self.output_panel] = output_panel_action
-        ascii_columns_action = QAction("Show Dec/ASCII Columns", self)
-        ascii_columns_action.setCheckable(True)
-        ascii_columns_action.setChecked(False)
-        ascii_columns_action.toggled.connect(self._set_ascii_columns_visible)
-        self.view_menu.addAction(ascii_columns_action)
+        self.ascii_columns_action = QAction("Show Dec/ASCII Columns", self)
+        self.ascii_columns_action.setCheckable(True)
+        self.ascii_columns_action.setChecked(False)
+        self.ascii_columns_action.toggled.connect(self._set_ascii_columns_visible)
+        self.view_menu.addAction(self.ascii_columns_action)
 
         self.view_menu.addSeparator()
 
