@@ -740,8 +740,8 @@ class MainWindow(QMainWindow):
         register_section = QWidget()
         register_layout = QVBoxLayout(register_section)
         register_layout.setContentsMargins(8, 8, 8, 8)
-        self.register_table = QTableWidget(len(REGISTER_ORDER), 2)
-        self.register_table.setHorizontalHeaderLabels(["Register", "Value"])
+        self.register_table = QTableWidget(len(REGISTER_ORDER), 4)
+        self.register_table.setHorizontalHeaderLabels(["Register", "Hex", "Dec", "ASCII"])
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
@@ -775,8 +775,8 @@ class MainWindow(QMainWindow):
         stack_layout = QVBoxLayout(stack_section)
         stack_layout.setContentsMargins(8, 8, 8, 8)
         stack_layout.addWidget(QLabel("Stack"))
-        self.stack_table = QTableWidget(16, 3)
-        self.stack_table.setHorizontalHeaderLabels(["Address", "Value", "Markers"])
+        self.stack_table = QTableWidget(16, 5)
+        self.stack_table.setHorizontalHeaderLabels(["Address", "Hex", "Dec", "ASCII", "Markers"])
         self.stack_table.verticalHeader().setVisible(False)
         self.stack_table.cellChanged.connect(self.on_stack_edit)
         self.stack_table.setFont(self._default_font())
@@ -1734,11 +1734,25 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem(f"0x{value:08X}")
             value_item.setData(Qt.ItemDataRole.UserRole, reg)
             value_item.setToolTip(str(value))
+            dec_item = QTableWidgetItem(str(value))
+            dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             prev_value = self.prev_registers.get(reg)
             if prev_value is not None and prev_value != value:
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
+                dec_item.setBackground(change_bg)
+                dec_item.setForeground(QColor("#1a1b26"))
+                ascii_item.setBackground(change_bg)
+                ascii_item.setForeground(QColor("#1a1b26"))
+                dec_item.setBackground(QColor("#ffb86c"))
+                dec_item.setForeground(QColor("#1a1b26"))
+                ascii_item.setBackground(QColor("#ffb86c"))
+                ascii_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
+            self.register_table.setItem(row, 2, dec_item)
+            self.register_table.setItem(row, 3, ascii_item)
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_flag_view(self) -> None:
@@ -1772,6 +1786,10 @@ class MainWindow(QMainWindow):
             addr_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             value_item = QTableWidgetItem(f"0x{value:08X}")
             value_item.setData(Qt.ItemDataRole.UserRole, addr)
+            dec_item = QTableWidgetItem(str(value))
+            dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             marker_text = []
             if addr == esp:
                 marker_text.append("ESP")
@@ -1781,11 +1799,15 @@ class MainWindow(QMainWindow):
             marker_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.stack_table.setItem(i, 0, addr_item)
             self.stack_table.setItem(i, 1, value_item)
-            self.stack_table.setItem(i, 2, marker_item)
+            self.stack_table.setItem(i, 2, dec_item)
+            self.stack_table.setItem(i, 3, ascii_item)
+            self.stack_table.setItem(i, 4, marker_item)
             if addr == esp:
                 highlight = QColor("#f286c4")
                 addr_item.setBackground(highlight)
                 value_item.setBackground(highlight)
+                dec_item.setBackground(highlight)
+                ascii_item.setBackground(highlight)
                 marker_item.setBackground(highlight)
             prev_value = self.prev_stack_values.get(addr)
             if prev_value is not None and prev_value != value:
@@ -1906,6 +1928,10 @@ class MainWindow(QMainWindow):
         self.cpu.write_mem(int(addr), 4, value)
         self._update_stack_view()
 
+
+    def _format_ascii_dword(self, value: int) -> str:
+        data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
+        return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
     def _parse_value(self, text: str) -> int:
         raw = text.strip()
         if raw.lower().startswith("0x"):
