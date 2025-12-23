@@ -747,6 +747,7 @@ class MainWindow(QMainWindow):
         self.register_table.setFont(self._default_font())
         register_header = self.register_table.horizontalHeader()
         register_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        register_header.setStretchLastSection(True)
         self.register_table.setColumnHidden(3, True)
         register_flags_row = QHBoxLayout()
         register_layout.addLayout(register_flags_row)
@@ -770,6 +771,7 @@ class MainWindow(QMainWindow):
         self.flag_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         flag_header = self.flag_table.horizontalHeader()
         flag_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        flag_header.setStretchLastSection(True)
         flags_layout.addWidget(self.flag_table)
         flags_layout.addStretch()
         register_flags_row.addWidget(flags_panel, 1, Qt.AlignmentFlag.AlignTop)
@@ -785,6 +787,7 @@ class MainWindow(QMainWindow):
         self.stack_table.setFont(self._default_font())
         stack_header = self.stack_table.horizontalHeader()
         stack_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        stack_header.setStretchLastSection(True)
         self.stack_table.setColumnHidden(3, True)
         stack_layout.addWidget(self.stack_table)
 
@@ -931,6 +934,7 @@ class MainWindow(QMainWindow):
         self.symbol_table.setFont(self._default_font())
         symbol_header = self.symbol_table.horizontalHeader()
         symbol_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        symbol_header.setStretchLastSection(True)
         symbol_dock = QDockWidget("Symbols", self)
         symbol_dock.setObjectName("SymbolsDock")
         symbol_dock.setWidget(self.symbol_table)
@@ -956,6 +960,7 @@ class MainWindow(QMainWindow):
         self.memory_table.setFont(self._default_font())
         memory_header = self.memory_table.horizontalHeader()
         memory_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        memory_header.setStretchLastSection(True)
         self.memory_table.setColumnHidden(2, True)
         self._update_memory_column_modes(ascii_visible=False)
 
@@ -1418,6 +1423,7 @@ class MainWindow(QMainWindow):
         self.cheat_table.setFont(self._default_font())
         cheat_header = self.cheat_table.horizontalHeader()
         cheat_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        cheat_header.setStretchLastSection(True)
         layout.addWidget(self.cheat_table)
         self._populate_cheat_sheet()
         return widget
@@ -1441,6 +1447,7 @@ class MainWindow(QMainWindow):
         self.syscall_table.setFont(self._default_font())
         syscall_header = self.syscall_table.horizontalHeader()
         syscall_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        syscall_header.setStretchLastSection(True)
         layout.addWidget(self.syscall_table)
         self._populate_syscall_sheet()
         return widget
