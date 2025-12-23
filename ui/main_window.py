@@ -745,7 +745,8 @@ class MainWindow(QMainWindow):
         self.register_table.verticalHeader().setVisible(False)
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
-        self.register_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        register_header = self.register_table.horizontalHeader()
+        register_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.register_table.setColumnHidden(3, True)
         register_flags_row = QHBoxLayout()
         register_layout.addLayout(register_flags_row)
@@ -767,7 +768,8 @@ class MainWindow(QMainWindow):
         self.flag_table.setFont(self._default_font())
         self.flag_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
         self.flag_table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.flag_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        flag_header = self.flag_table.horizontalHeader()
+        flag_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         flags_layout.addWidget(self.flag_table)
         flags_layout.addStretch()
         register_flags_row.addWidget(flags_panel, 1, Qt.AlignmentFlag.AlignTop)
@@ -781,7 +783,8 @@ class MainWindow(QMainWindow):
         self.stack_table.verticalHeader().setVisible(False)
         self.stack_table.cellChanged.connect(self.on_stack_edit)
         self.stack_table.setFont(self._default_font())
-        self.stack_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        stack_header = self.stack_table.horizontalHeader()
+        stack_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.stack_table.setColumnHidden(3, True)
         stack_layout.addWidget(self.stack_table)
 
@@ -926,7 +929,8 @@ class MainWindow(QMainWindow):
         self.symbol_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.symbol_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.symbol_table.setFont(self._default_font())
-        self.symbol_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        symbol_header = self.symbol_table.horizontalHeader()
+        symbol_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         symbol_dock = QDockWidget("Symbols", self)
         symbol_dock.setObjectName("SymbolsDock")
         symbol_dock.setWidget(self.symbol_table)
@@ -951,9 +955,7 @@ class MainWindow(QMainWindow):
         self.memory_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.memory_table.setFont(self._default_font())
         memory_header = self.memory_table.horizontalHeader()
-        memory_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        memory_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        memory_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        memory_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.memory_table.setColumnHidden(2, True)
         self._update_memory_column_modes(ascii_visible=False)
 
@@ -1277,7 +1279,6 @@ class MainWindow(QMainWindow):
             self.cheat_table.setItem(row, 2, QTableWidgetItem(defn.description))
             self.cheat_table.setItem(row, 3, QTableWidgetItem(defn.syntax))
             self.cheat_table.setItem(row, 4, QTableWidgetItem(defn.flags))
-        self.cheat_table.resizeColumnsToContents()
 
     def filter_cheat_sheet(self, text: str) -> None:
         query = text.strip().lower()
@@ -1300,7 +1301,6 @@ class MainWindow(QMainWindow):
             self.syscall_table.setItem(row, 2, QTableWidgetItem(defn.description))
             self.syscall_table.setItem(row, 3, QTableWidgetItem(defn.args))
             self.syscall_table.setItem(row, 4, QTableWidgetItem(defn.returns))
-        self.syscall_table.resizeColumnsToContents()
 
     def filter_syscall_sheet(self, text: str) -> None:
         query = text.strip().lower()
@@ -1417,9 +1417,7 @@ class MainWindow(QMainWindow):
         self.cheat_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.cheat_table.setFont(self._default_font())
         cheat_header = self.cheat_table.horizontalHeader()
-        for col in (0, 1, 3, 4):
-            cheat_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        cheat_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        cheat_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         layout.addWidget(self.cheat_table)
         self._populate_cheat_sheet()
         return widget
@@ -1442,9 +1440,7 @@ class MainWindow(QMainWindow):
         self.syscall_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.syscall_table.setFont(self._default_font())
         syscall_header = self.syscall_table.horizontalHeader()
-        for col in (0, 1, 3, 4):
-            syscall_header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        syscall_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        syscall_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         layout.addWidget(self.syscall_table)
         self._populate_syscall_sheet()
         return widget
@@ -1867,7 +1863,6 @@ class MainWindow(QMainWindow):
             hex_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             self.memory_table.setItem(row, 1, hex_item)
             self.memory_table.setItem(row, 2, QTableWidgetItem(ascii_text))
-        self.memory_table.resizeColumnsToContents()
 
     def _highlight_current_line(self) -> None:
         selections = []
