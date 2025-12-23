@@ -1738,6 +1738,7 @@ class MainWindow(QMainWindow):
             self.updating_views = False
 
     def _update_register_view(self) -> None:
+        ascii_visible = not self.register_table.isColumnHidden(3)
         for row, reg in enumerate(REGISTER_ORDER):
             name_item = QTableWidgetItem(reg)
             name_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1748,19 +1749,21 @@ class MainWindow(QMainWindow):
             value_item.setToolTip(str(value))
             dec_item = QTableWidgetItem(str(value))
             dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
-            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             prev_value = self.prev_registers.get(reg)
             if prev_value is not None and prev_value != value:
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
                 dec_item.setBackground(QColor("#ffb86c"))
                 dec_item.setForeground(QColor("#1a1b26"))
-                ascii_item.setBackground(QColor("#ffb86c"))
-                ascii_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
             self.register_table.setItem(row, 2, dec_item)
-            self.register_table.setItem(row, 3, ascii_item)
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(QColor("#ffb86c"))
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.register_table.setItem(row, 3, ascii_item)
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_flag_view(self) -> None:
@@ -1787,6 +1790,7 @@ class MainWindow(QMainWindow):
         ebp = self.cpu.get_reg("EBP")
         base = clamp_u32(esp - 32)
         rows = self.stack_table.rowCount()
+        ascii_visible = not self.stack_table.isColumnHidden(3)
         for i in range(rows):
             addr = clamp_u32(base + i * 4)
             value = self.cpu.read_mem(addr, 4)
@@ -1796,8 +1800,6 @@ class MainWindow(QMainWindow):
             value_item.setData(Qt.ItemDataRole.UserRole, addr)
             dec_item = QTableWidgetItem(str(value))
             dec_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
-            ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             marker_text = []
             if addr == esp:
                 marker_text.append("ESP")
@@ -1808,14 +1810,12 @@ class MainWindow(QMainWindow):
             self.stack_table.setItem(i, 0, addr_item)
             self.stack_table.setItem(i, 1, value_item)
             self.stack_table.setItem(i, 2, dec_item)
-            self.stack_table.setItem(i, 3, ascii_item)
             self.stack_table.setItem(i, 4, marker_item)
             if addr == esp:
                 highlight = QColor("#f286c4")
                 addr_item.setBackground(highlight)
                 value_item.setBackground(highlight)
                 dec_item.setBackground(highlight)
-                ascii_item.setBackground(highlight)
                 marker_item.setBackground(highlight)
             prev_value = self.prev_stack_values.get(addr)
             if prev_value is not None and prev_value != value:
@@ -1824,8 +1824,15 @@ class MainWindow(QMainWindow):
                 value_item.setForeground(QColor("#1a1b26"))
                 dec_item.setBackground(change_bg)
                 dec_item.setForeground(QColor("#1a1b26"))
-                ascii_item.setBackground(change_bg)
-                ascii_item.setForeground(QColor("#1a1b26"))
+            if ascii_visible:
+                ascii_item = QTableWidgetItem(self._format_ascii_dword(value))
+                ascii_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                if addr == esp:
+                    ascii_item.setBackground(highlight)
+                if prev_value is not None and prev_value != value:
+                    ascii_item.setBackground(change_bg)
+                    ascii_item.setForeground(QColor("#1a1b26"))
+                self.stack_table.setItem(i, 3, ascii_item)
         self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
@@ -1948,8 +1955,12 @@ class MainWindow(QMainWindow):
     def _set_ascii_columns_visible(self, visible: bool) -> None:
         if hasattr(self, "register_table"):
             self.register_table.setColumnHidden(3, not visible)
+            if visible:
+                self._update_register_view()
         if hasattr(self, "stack_table"):
             self.stack_table.setColumnHidden(3, not visible)
+            if visible:
+                self._update_stack_view()
         if hasattr(self, "memory_table"):
             self.memory_table.setColumnHidden(2, not visible)
             self._update_memory_column_modes(ascii_visible=visible)
