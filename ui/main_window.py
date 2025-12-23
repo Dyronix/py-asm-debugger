@@ -746,6 +746,7 @@ class MainWindow(QMainWindow):
         self.register_table.cellChanged.connect(self.on_register_edit)
         self.register_table.setFont(self._default_font())
         self.register_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.register_table.setColumnHidden(3, True)
         register_flags_row = QHBoxLayout()
         register_layout.addLayout(register_flags_row)
         register_panel = QWidget()
@@ -781,6 +782,7 @@ class MainWindow(QMainWindow):
         self.stack_table.cellChanged.connect(self.on_stack_edit)
         self.stack_table.setFont(self._default_font())
         self.stack_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.stack_table.setColumnHidden(3, True)
         stack_layout.addWidget(self.stack_table)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -910,6 +912,11 @@ class MainWindow(QMainWindow):
         output_panel_action.toggled.connect(lambda visible: self._on_panel_visibility_changed(self.output_panel, visible))
         self.view_menu.addAction(output_panel_action)
         self._panel_view_actions[self.output_panel] = output_panel_action
+        ascii_columns_action = QAction("Show ASCII Columns", self)
+        ascii_columns_action.setCheckable(True)
+        ascii_columns_action.setChecked(False)
+        ascii_columns_action.toggled.connect(self._set_ascii_columns_visible)
+        self.view_menu.addAction(ascii_columns_action)
 
         self.view_menu.addSeparator()
 
@@ -1932,6 +1939,12 @@ class MainWindow(QMainWindow):
     def _format_ascii_dword(self, value: int) -> str:
         data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
         return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
+
+    def _set_ascii_columns_visible(self, visible: bool) -> None:
+        if hasattr(self, "register_table"):
+            self.register_table.setColumnHidden(3, not visible)
+        if hasattr(self, "stack_table"):
+            self.stack_table.setColumnHidden(3, not visible)
     def _parse_value(self, text: str) -> int:
         raw = text.strip()
         if raw.lower().startswith("0x"):
