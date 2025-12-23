@@ -671,6 +671,9 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.open_file)
         self.file_menu.addAction(open_action)
 
+        self.open_recent_menu = self.file_menu.addMenu("Open Recent")
+        self._rebuild_recent_menu()
+
         save_action = QAction("Save", self)
         save_action.triggered.connect(self.save_file)
         self.file_menu.addAction(save_action)
@@ -679,8 +682,6 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         self.file_menu.addAction(save_as_action)
 
-        self.open_recent_menu = self.file_menu.addMenu("Open Recent")
-        self._rebuild_recent_menu()
 
         toggle_bp_action = QAction("Toggle Breakpoint", self)
         toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
