@@ -1194,7 +1194,7 @@ class MainWindow(QMainWindow):
             with open(self._config_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except OSError:
-            # Silently ignore file write errors; layout state is non-critical
+            # Silently ignore errors when saving layout - non-critical operation
             pass
 
     def _load_breakpoints(self) -> None:
@@ -1206,7 +1206,7 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
             self.breakpoint_manager.load_json(data)
         except (OSError, ValueError, json.JSONDecodeError):
-            # Silently ignore file read/parse errors; app will start with no breakpoints
+            # Silently ignore errors when loading breakpoints - start with empty state if file is corrupted or missing
             pass
 
     def _save_breakpoints(self) -> None:
@@ -1214,7 +1214,7 @@ class MainWindow(QMainWindow):
             with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
                 json.dump(self.breakpoint_manager.to_json(), f, indent=2)
         except OSError:
-            # Silently ignore file write errors; breakpoint state is non-critical
+            # Silently ignore errors when saving breakpoints - non-critical operation
             pass
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
@@ -1956,17 +1956,14 @@ class MainWindow(QMainWindow):
         self._update_stack_view()
 
     def _format_ascii_dword(self, value: int) -> str:
-        # Interpret the 32-bit word as little-endian bytes for ASCII display.
-        # This matches the x86 target of this debugger; adjust if other
-        # architectures (with different endianness) are supported in future.
+        # Interpret the 32-bit value's raw in-memory bytes (little-endian) as
+        # printable ASCII characters, replacing non-printables with '.'.
+        # This matches the x86 target of this debugger and shows the byte
+        # representation of the dword, not an interpreted ASCII string.
         data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
         return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
 
     def _set_ascii_columns_visible(self, visible: bool) -> None:
-        if hasattr(self, "register_table"):
-            self.register_table.setColumnHidden(3, not visible)
-            if visible:
-                self._update_register_view()
         if hasattr(self, "register_table"):
             # Hide both Dec (2) and ASCII (3) columns together for registers
             self.register_table.setColumnHidden(2, not visible)
