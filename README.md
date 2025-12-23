@@ -100,8 +100,8 @@ Operand descriptors are limited to x86-32: `reg8`, `reg16`, `reg32`, `imm8`, `im
 
 ### Loading
 
-Use `File -> Load Cheat Sheet...` to load a JSON file from disk, or
-`File -> Reload Cheat Sheet` to re-read the current sheet. A reload button is also
+Use `Edit -> Load Cheat Sheet...` to load a JSON file from disk, or
+`Edit -> Reload Cheat Sheet` to re-read the current sheet. A reload button is also
 available in the Cheat Sheets panel header.
 
 ### Limitations
