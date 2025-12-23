@@ -1960,11 +1960,16 @@ class MainWindow(QMainWindow):
             self.register_table.setColumnHidden(3, not visible)
             if visible:
                 self._update_register_view()
+        if hasattr(self, "register_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for registers
+            self.register_table.setColumnHidden(2, not visible)
+            self.register_table.setColumnHidden(3, not visible)
         if hasattr(self, "stack_table"):
+            # Hide both Dec (2) and ASCII (3) columns together for the stack
+            self.stack_table.setColumnHidden(2, not visible)
             self.stack_table.setColumnHidden(3, not visible)
-            if visible:
-                self._update_stack_view()
         if hasattr(self, "memory_table"):
+            # Memory table has only one extra column: ASCII at index 2
             self.memory_table.setColumnHidden(2, not visible)
             self._update_memory_column_modes(ascii_visible=visible)
 
