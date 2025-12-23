@@ -1956,17 +1956,14 @@ class MainWindow(QMainWindow):
         self._update_stack_view()
 
     def _format_ascii_dword(self, value: int) -> str:
-        # Interpret the 32-bit word as little-endian bytes for ASCII display.
-        # This matches the x86 target of this debugger; adjust if other
-        # architectures (with different endianness) are supported in future.
+        # Interpret the 32-bit value's raw in-memory bytes (little-endian) as
+        # printable ASCII characters, replacing non-printables with '.'.
+        # This matches the x86 target of this debugger and shows the byte
+        # representation of the dword, not an interpreted ASCII string.
         data = (value & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
         return "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
 
     def _set_ascii_columns_visible(self, visible: bool) -> None:
-        if hasattr(self, "register_table"):
-            self.register_table.setColumnHidden(3, not visible)
-            if visible:
-                self._update_register_view()
         if hasattr(self, "register_table"):
             # Hide both Dec (2) and ASCII (3) columns together for registers
             self.register_table.setColumnHidden(2, not visible)
