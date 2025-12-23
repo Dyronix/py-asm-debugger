@@ -51,7 +51,7 @@ from PyQt6.QtWidgets import (
 
 from core.cpu import CPUState, REGISTER_ORDER, clamp_u32
 from core.emulator import Emulator, StepOutcome
-from core.instructions import EmulationError, get_instruction_defs
+from core.instructions import get_instruction_defs
 from core.model import Program
 from core.parser import ParseError, parse_assembly
 from core.syscalls import get_syscall_defs
