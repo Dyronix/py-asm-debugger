@@ -1205,7 +1205,9 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
             self.breakpoint_manager.load_json(data)
         except (OSError, ValueError, json.JSONDecodeError):
-            pass
+            # If the breakpoint file is missing or corrupted, ignore the error
+            # and start with an empty set of breakpoints.
+            return
 
     def _save_breakpoints(self) -> None:
         try:
