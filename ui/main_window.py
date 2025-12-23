@@ -954,6 +954,7 @@ class MainWindow(QMainWindow):
         memory_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         memory_header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         memory_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.memory_table.setColumnHidden(2, True)
 
         memory_controls = QWidget()
         memory_layout = QHBoxLayout(memory_controls)
@@ -1945,6 +1946,8 @@ class MainWindow(QMainWindow):
             self.register_table.setColumnHidden(3, not visible)
         if hasattr(self, "stack_table"):
             self.stack_table.setColumnHidden(3, not visible)
+        if hasattr(self, "memory_table"):
+            self.memory_table.setColumnHidden(2, not visible)
     def _parse_value(self, text: str) -> int:
         raw = text.strip()
         if raw.lower().startswith("0x"):
