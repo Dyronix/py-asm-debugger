@@ -1754,10 +1754,6 @@ class MainWindow(QMainWindow):
             if prev_value is not None and prev_value != value:
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
-                dec_item.setBackground(change_bg)
-                dec_item.setForeground(QColor("#1a1b26"))
-                ascii_item.setBackground(change_bg)
-                ascii_item.setForeground(QColor("#1a1b26"))
                 dec_item.setBackground(QColor("#ffb86c"))
                 dec_item.setForeground(QColor("#1a1b26"))
                 ascii_item.setBackground(QColor("#ffb86c"))
