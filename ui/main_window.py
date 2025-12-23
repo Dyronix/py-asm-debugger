@@ -1739,7 +1739,6 @@ class MainWindow(QMainWindow):
                 value_item.setBackground(QColor("#ffb86c"))
                 value_item.setForeground(QColor("#1a1b26"))
             self.register_table.setItem(row, 1, value_item)
-        self.register_table.resizeColumnsToContents()
         self.prev_registers = {reg: self.cpu.get_reg(reg) for reg in REGISTER_ORDER}
 
     def _update_flag_view(self) -> None:
@@ -1751,7 +1750,6 @@ class MainWindow(QMainWindow):
             value_item = QTableWidgetItem(str(value))
             value_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.flag_table.setItem(row, 1, value_item)
-        self.flag_table.resizeColumnsToContents()
         self._resize_flag_table()
 
     def _resize_flag_table(self) -> None:
@@ -1794,7 +1792,6 @@ class MainWindow(QMainWindow):
                 change_bg = QColor("#ffb86c")
                 value_item.setBackground(change_bg)
                 value_item.setForeground(QColor("#1a1b26"))
-        self.stack_table.resizeColumnsToContents()
         self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
