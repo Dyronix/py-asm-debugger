@@ -1157,8 +1157,9 @@ class MainWindow(QMainWindow):
                 self.recent_files = [path for path in recent if isinstance(path, str)]
                 self._rebuild_recent_menu()
         except (OSError, ValueError, json.JSONDecodeError):
-            # If the layout file is missing, unreadable, or malformed, ignore the error
-            # and continue with the default window layout.
+            # If the layout file is unreadable, malformed, or otherwise invalid, ignore the
+            # error and continue with the default window layout. Missing files are handled
+            # earlier by falling back to the default layout path.
             pass
 
     def _apply_pinned_state(self) -> None:
