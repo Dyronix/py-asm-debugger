@@ -309,7 +309,10 @@ class CheatSheetManager:
         )
 
     def _matches_any_form(self, instr: Instruction, forms: Iterable[OperandForm]) -> bool:
-        for form in forms:
+        forms_list = list(forms)
+        if not forms_list:
+            return len(instr.operands) == 0
+        for form in forms_list:
             if self._matches_form(instr, form):
                 return True
         return False

@@ -180,6 +180,30 @@
       ]
     },
     {
+      "mnemonic": "jng",
+      "summary": "Jump Not Greater",
+      "description": "Alias for JLE (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jge",
+      "summary": "Jump Greater or Equal",
+      "description": "Jump if greater or equal (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jnl",
+      "summary": "Jump Not Less",
+      "description": "Alias for JGE (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
       "mnemonic": "call",
       "summary": "Call",
       "description": "Call a label.",
