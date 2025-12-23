@@ -1,6 +1,6 @@
 # ASM Debugger
 
-![Release workflow status](https://github.com/Dyronix/py-asm-debugger/actions/workflows/release.yml/badge.svg?tag=v1.0.0)
+[![release](https://github.com/Dyronix/py-asm-debugger/actions/workflows/release.yml/badge.svg)](https://github.com/Dyronix/py-asm-debugger/actions/workflows/release.yml)
 
 A simple x86 (Intel syntax) assembly editor and step debugger built with PyQt6.
 
@@ -113,3 +113,4 @@ Only x86 32-bit cheat sheets are supported. x64/AMD64 sheets are rejected.
 ```bash
 python -m pytest
 ```
+
