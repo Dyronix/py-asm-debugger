@@ -1863,7 +1863,9 @@ class MainWindow(QMainWindow):
             hex_bytes = " ".join(f"{b:02X}" for b in data)
             ascii_text = "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
             self.memory_table.setItem(row, 0, QTableWidgetItem(f"0x{addr:08X}"))
-            self.memory_table.setItem(row, 1, QTableWidgetItem(hex_bytes))
+            hex_item = QTableWidgetItem(hex_bytes)
+            hex_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.memory_table.setItem(row, 1, hex_item)
             self.memory_table.setItem(row, 2, QTableWidgetItem(ascii_text))
         self.memory_table.resizeColumnsToContents()
 
