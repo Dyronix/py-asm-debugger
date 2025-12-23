@@ -77,9 +77,10 @@ Sample programs are in `examples/`.
 ## Cheat Sheets
 
 Cheat sheets define which instructions are recognized, highlighted, and executable.
-By default the app loads:
+Bundled cheat sheets include:
 
 - `assets/cheatsheets/default_gcc_intel_x86_32_min.json`
+- `assets/cheatsheets/default_gcc_att_x86_32_min.json`
 
 ### Format (JSON)
 

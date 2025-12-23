@@ -147,7 +147,7 @@ class CheatSheetManager:
             if not executor:
                 raise CheatSheetError(
                     f"Instruction '{instruction.mnemonic}' is not implemented in the emulator.")
-            syntax = self._format_syntax(instruction)
+            syntax = self._format_syntax(instruction, sheet.syntax)
             defs.append(
                 InstructionDef(
                     mnemonic=instruction.mnemonic,
@@ -160,14 +160,58 @@ class CheatSheetManager:
             )
         set_active_instruction_defs(defs)
 
-    def _format_syntax(self, instruction: CheatSheetInstruction) -> str:
+    def _format_syntax(self, instruction: CheatSheetInstruction, syntax: str) -> str:
         if not instruction.forms:
             return instruction.mnemonic
+        if syntax == "att":
+            return self._format_att_syntax(instruction)
         parts = []
         for form in instruction.forms:
             operands = ", ".join(form.operands)
             parts.append(f"{instruction.mnemonic} {operands}" if operands else instruction.mnemonic)
         return " | ".join(parts)
+
+    def _format_att_syntax(self, instruction: CheatSheetInstruction) -> str:
+        parts = []
+        for form in instruction.forms:
+            suffix = self._att_suffix_for_operands(form.operands)
+            mnemonic = f"{instruction.mnemonic}{suffix}" if suffix else instruction.mnemonic
+            operands = list(reversed(form.operands))
+            rendered_ops = ", ".join(self._att_operand_display(op) for op in operands)
+            parts.append(f"{mnemonic} {rendered_ops}" if rendered_ops else mnemonic)
+        return " | ".join(parts)
+
+    def _att_suffix_for_operands(self, operands: List[str]) -> str:
+        size_map = {"8": "b", "16": "w", "32": "l"}
+        sizes = []
+        for op in operands:
+            for bits in ("32", "16", "8"):
+                if op.endswith(bits):
+                    sizes.append(bits)
+                    break
+        if not sizes:
+            return ""
+        preferred = sizes[0]
+        for bits in sizes:
+            if bits == "32":
+                preferred = "32"
+                break
+            if bits == "16" and preferred != "32":
+                preferred = "16"
+        return size_map.get(preferred, "")
+
+    def _att_operand_display(self, operand: str) -> str:
+        if operand.startswith("reg"):
+            return f"%{operand}"
+        if operand.startswith("imm"):
+            return f"${operand}"
+        if operand.startswith("mem"):
+            return f"disp(%{operand.replace('mem', 'reg')})"
+        if operand.startswith("rel"):
+            return "label"
+        if operand == "segment":
+            return "%seg"
+        return operand
 
     def _format_flags(self, instruction: CheatSheetInstruction) -> str:
         flagged = []
