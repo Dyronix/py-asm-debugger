@@ -1334,7 +1334,14 @@ class MainWindow(QMainWindow):
             palette.setColor(QPalette.ColorRole.Highlight, highlight_bg)
             palette.setColor(QPalette.ColorRole.HighlightedText, highlight_fg)
             edit.setPalette(palette)
-            edit.setStyleSheet(f"QPlainTextEdit {{ background-color: {base_bg.name()}; color: {text_fg.name()}; }}")
+            edit.setStyleSheet(
+                "QPlainTextEdit {"
+                f" background-color: {base_bg.name()};"
+                f" color: {text_fg.name()};"
+                f" selection-background-color: {highlight_bg.name()};"
+                f" selection-color: {highlight_fg.name()};"
+                " }"
+            )
         if isinstance(self.editor, CodeEditor):
             self.editor.set_line_number_colors(panel_bg, QColor("#6272a4"))
 
@@ -1658,6 +1665,11 @@ class MainWindow(QMainWindow):
 
     def reset_state(self) -> None:
         self.timer.stop()
+        if self.source_dirty or not self.program.instructions:
+            if not self.ensure_program():
+                return
+            self.log("CPU state reset.")
+            return
         self.cpu.reset()
         self.cpu.load_data(self.program.data_bytes)
         entry_point = self._resolve_entry_point()
@@ -1672,9 +1684,10 @@ class MainWindow(QMainWindow):
         self.log("CPU state reset.")
 
     def ensure_program(self) -> bool:
+        was_dirty = self.source_dirty
         if not self._autosave_if_needed():
             return False
-        if self.source_dirty or not self.program.instructions:
+        if was_dirty or not self.program.instructions:
             return self.parse_current_program()
         return True
 
@@ -1836,6 +1849,7 @@ class MainWindow(QMainWindow):
                     selection = QTextEdit.ExtraSelection()
                     selection.cursor = cursor
                     selection.format.setBackground(QColor("#fff2cc"))
+                    selection.format.setForeground(QColor("#1e1f29"))
                     selections.append(selection)
         self.editor.setExtraSelections(selections)
 
