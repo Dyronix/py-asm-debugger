@@ -1058,7 +1058,7 @@ class MainWindow(QMainWindow):
         self.reset_button.clicked.connect(self.reset_state)
 
         self.play_button.setToolTip("Play (F5)")
-        self.pause_button.setToolTip("Pause (F9)")
+        self.pause_button.setToolTip("Pause (Shift+F5)")
         self.step_button.setToolTip("Step (F10)")
         self.reset_button.setToolTip("Reset (Ctrl+Shift+F5)")
 
