@@ -23,7 +23,7 @@ stack operations in real time.
 - Edit, open, and save `.asm` files.
 - Parse and execute instructions step-by-step or automatically at a configurable rate.
 - Live register and stack visualization with editable values.
-- Instruction cheat sheet generated from the emulator instruction registry.
+- Instruction cheat sheet driven by the active cheat sheet JSON.
 - Logging for parse errors, runtime errors, and halt events.
 - Syscall output panel for INT 0x80 write calls.
 - External symbol stubs for common C calls: `printf`/`puts`/`putchar`, `strlen`/`strcmp`, `memcpy`/`memset`, and `malloc`/`free` (plus `operator new/delete` aliases).
@@ -73,6 +73,40 @@ Sample programs are in `examples/`.
 
 - `examples/add_sub_demo.asm`
 - `examples/push_pop_demo.asm`
+
+## Cheat Sheets
+
+Cheat sheets define which instructions are recognized, highlighted, and executable.
+Bundled cheat sheets include:
+
+- `assets/cheatsheets/default_gcc_intel_x86_32_min.json`
+- `assets/cheatsheets/default_gcc_att_x86_32_min.json`
+
+### Format (JSON)
+
+Each cheat sheet is a JSON file with the following top-level fields:
+
+- `schema_version` (integer, currently `1`)
+- `name` (string)
+- `description` (string, optional)
+- `isa` (object): `arch` must be `x86`, `mode` must be `32`
+- `syntax` (`intel` or `att`)
+- `toolchain` (object): `assembler`, `compiler`, optional version tags
+- `instructions` (array): entries with `mnemonic`, `summary`, optional `description`,
+  and operand `forms`
+
+Operand descriptors are limited to x86-32: `reg8`, `reg16`, `reg32`, `imm8`, `imm16`,
+`imm32`, `mem8`, `mem16`, `mem32`, `rel8`, `rel32`, `segment`.
+
+### Loading
+
+Use `Edit -> Load Cheat Sheet...` to load a JSON file from disk, or
+`Edit -> Reload Cheat Sheet` to re-read the current sheet. A reload button is also
+available in the Cheat Sheets panel header.
+
+### Limitations
+
+Only x86 32-bit cheat sheets are supported. x64/AMD64 sheets are rejected.
 
 ## Tests
 

@@ -19,7 +19,7 @@ class ExecResult:
 @dataclass(frozen=True)
 class InstructionDef:
     mnemonic: str
-    meaning: str
+    summary: str
     description: str
     syntax: str
     flags: str
@@ -37,11 +37,22 @@ class EmulationError(Exception):
 REGISTERS = {"EAX", "EBX", "ECX", "EDX", "ESI", "EDI", "EBP", "ESP", "EIP"}
 
 
+INSTRUCTION_IMPLS: Dict[str, Callable[[CPUState, Instruction, Program], ExecResult]] = {}
 INSTRUCTION_SET: Dict[str, InstructionDef] = {}
 
 
-def register_instruction(defn: InstructionDef) -> None:
-    INSTRUCTION_SET[defn.mnemonic.upper()] = defn
+def register_instruction_impl(mnemonic: str, executor: Callable[[CPUState, Instruction, Program], ExecResult]) -> None:
+    INSTRUCTION_IMPLS[mnemonic.upper()] = executor
+
+
+def set_active_instruction_defs(defs: List[InstructionDef]) -> None:
+    INSTRUCTION_SET.clear()
+    for defn in defs:
+        INSTRUCTION_SET[defn.mnemonic.upper()] = defn
+
+
+def get_instruction_executor(mnemonic: str) -> Callable[[CPUState, Instruction, Program], ExecResult] | None:
+    return INSTRUCTION_IMPLS.get(mnemonic.upper())
 
 
 def _expect_operands(instr: Instruction, count: int) -> None:
@@ -814,326 +825,38 @@ def exec_lea(cpu: CPUState, instr: Instruction, program: Program) -> ExecResult:
     )
 
 
-register_instruction(
-    InstructionDef(
-        mnemonic="MOV",
-        meaning="Move",
-        description="Copy data from source to destination register.",
-        syntax="MOV reg, imm | MOV reg, reg | MOV reg, [reg] | MOV [reg], imm/reg",
-        flags="N/A",
-        executor=exec_mov,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="ADD",
-        meaning="Add",
-        description="Add source operand to destination register.",
-        syntax="ADD reg, imm | ADD reg, reg",
-        flags="N/A",
-        executor=exec_add,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="SUB",
-        meaning="Subtract",
-        description="Subtract source operand from destination register.",
-        syntax="SUB reg, imm | SUB reg, reg",
-        flags="N/A",
-        executor=exec_sub,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="AND",
-        meaning="Bitwise AND",
-        description="Bitwise AND source into destination register.",
-        syntax="AND reg, imm | AND reg, reg",
-        flags="N/A",
-        executor=exec_and,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="OR",
-        meaning="Bitwise OR",
-        description="Bitwise OR source into destination register.",
-        syntax="OR reg, imm | OR reg, reg",
-        flags="N/A",
-        executor=exec_or,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="XOR",
-        meaning="Bitwise XOR",
-        description="Bitwise XOR source into destination register.",
-        syntax="XOR reg, imm | XOR reg, reg",
-        flags="N/A",
-        executor=exec_xor,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="NOT",
-        meaning="Bitwise NOT",
-        description="Invert bits in destination register.",
-        syntax="NOT reg",
-        flags="N/A",
-        executor=exec_not,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="SHL",
-        meaning="Shift Left",
-        description="Logical left shift by immediate or register count.",
-        syntax="SHL reg, imm | SHL reg, reg",
-        flags="N/A",
-        executor=exec_shl,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="SHR",
-        meaning="Shift Right",
-        description="Logical right shift by immediate or register count.",
-        syntax="SHR reg, imm | SHR reg, reg",
-        flags="N/A",
-        executor=exec_shr,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="INC",
-        meaning="Increment",
-        description="Increment register by 1.",
-        syntax="INC reg",
-        flags="N/A",
-        executor=exec_inc,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="DEC",
-        meaning="Decrement",
-        description="Decrement register by 1.",
-        syntax="DEC reg",
-        flags="N/A",
-        executor=exec_dec,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="DIV",
-        meaning="Unsigned Divide",
-        description="Divide EDX:EAX by operand; quotient->EAX, remainder->EDX.",
-        syntax="DIV reg | DIV imm | DIV [reg]",
-        flags="N/A",
-        executor=exec_div,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="PUSH",
-        meaning="Push",
-        description="Push a value onto the stack.",
-        syntax="PUSH reg | PUSH imm",
-        flags="N/A",
-        executor=exec_push,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="POP",
-        meaning="Pop",
-        description="Pop a value from the stack into a register.",
-        syntax="POP reg",
-        flags="N/A",
-        executor=exec_pop,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="NOP",
-        meaning="No Operation",
-        description="Do nothing.",
-        syntax="NOP",
-        flags="N/A",
-        executor=exec_nop,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="HLT",
-        meaning="Halt",
-        description="Stop execution.",
-        syntax="HLT",
-        flags="N/A",
-        executor=exec_hlt,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="INT",
-        meaning="Interrupt",
-        description="Software interrupt; supports INT 0x80 Linux syscalls.",
-        syntax="INT imm",
-        flags="N/A",
-        executor=exec_int,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="CMP",
-        meaning="Compare",
-        description="Compare two operands and set flags.",
-        syntax="CMP reg, imm | CMP reg, reg",
-        flags="ZF SF CF OF",
-        executor=exec_cmp,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JMP",
-        meaning="Jump",
-        description="Unconditional jump to label.",
-        syntax="JMP label",
-        flags="N/A",
-        executor=exec_jmp,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JE",
-        meaning="Jump Equal",
-        description="Jump if ZF == 1.",
-        syntax="JE label",
-        flags="Reads ZF",
-        executor=exec_je,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JZ",
-        meaning="Jump Zero",
-        description="Jump if ZF == 1.",
-        syntax="JZ label",
-        flags="Reads ZF",
-        executor=exec_je,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JNE",
-        meaning="Jump Not Equal",
-        description="Jump if ZF == 0.",
-        syntax="JNE label",
-        flags="Reads ZF",
-        executor=exec_jne,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JNZ",
-        meaning="Jump Not Zero",
-        description="Jump if ZF == 0.",
-        syntax="JNZ label",
-        flags="Reads ZF",
-        executor=exec_jne,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JLE",
-        meaning="Jump Less or Equal",
-        description="Jump if ZF == 1 or SF != OF (signed).",
-        syntax="JLE label",
-        flags="Reads ZF SF OF",
-        executor=_exec_jle,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JNG",
-        meaning="Jump Not Greater (alias for JLE)",
-        description="Jump if ZF == 1 or SF != OF (signed).",
-        syntax="JNG label",
-        flags="Reads ZF SF OF",
-        executor=_exec_jle,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JGE",
-        meaning="Jump Greater or Equal",
-        description="Jump if SF == OF (signed).",
-        syntax="JGE label",
-        flags="Reads SF OF",
-        executor=_exec_jge,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="JNL",
-        meaning="Jump Not Less (alias for JGE)",
-        description="Jump if SF == OF (signed).",
-        syntax="JNL label",
-        flags="Reads SF OF",
-        executor=_exec_jge,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="TEST",
-        meaning="Bitwise Test",
-        description="Bitwise AND of operands; updates flags, discards result.",
-        syntax="TEST reg/mem, reg/imm",
-        flags="ZF SF CF OF",
-        executor=exec_test,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="CALL",
-        meaning="Call",
-        description="Call a label, pushing return address onto the stack.",
-        syntax="CALL label",
-        flags="N/A",
-        executor=exec_call,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="RET",
-        meaning="Return",
-        description="Return to the address on top of the stack.",
-        syntax="RET",
-        flags="N/A",
-        executor=exec_ret,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="LEAVE",
-        meaning="Leave",
-        description="Restore stack for epilogue (MOV ESP, EBP; POP EBP).",
-        syntax="LEAVE",
-        flags="N/A",
-        executor=exec_leave,
-    )
-)
-register_instruction(
-    InstructionDef(
-        mnemonic="LEA",
-        meaning="Load Effective Address",
-        description="Load effective address of a memory operand into a register.",
-        syntax="LEA reg, [reg] | LEA reg, [reg+imm] | LEA reg, label",
-        flags="N/A",
-        executor=exec_lea,
-    )
-)
+register_instruction_impl("MOV", exec_mov)
+register_instruction_impl("ADD", exec_add)
+register_instruction_impl("SUB", exec_sub)
+register_instruction_impl("AND", exec_and)
+register_instruction_impl("OR", exec_or)
+register_instruction_impl("XOR", exec_xor)
+register_instruction_impl("NOT", exec_not)
+register_instruction_impl("SHL", exec_shl)
+register_instruction_impl("SHR", exec_shr)
+register_instruction_impl("INC", exec_inc)
+register_instruction_impl("DEC", exec_dec)
+register_instruction_impl("DIV", exec_div)
+register_instruction_impl("PUSH", exec_push)
+register_instruction_impl("POP", exec_pop)
+register_instruction_impl("NOP", exec_nop)
+register_instruction_impl("HLT", exec_hlt)
+register_instruction_impl("INT", exec_int)
+register_instruction_impl("CMP", exec_cmp)
+register_instruction_impl("JMP", exec_jmp)
+register_instruction_impl("JE", exec_je)
+register_instruction_impl("JZ", exec_je)
+register_instruction_impl("JNE", exec_jne)
+register_instruction_impl("JNZ", exec_jne)
+register_instruction_impl("JLE", _exec_jle)
+register_instruction_impl("JNG", _exec_jle)
+register_instruction_impl("JGE", _exec_jge)
+register_instruction_impl("JNL", _exec_jge)
+register_instruction_impl("TEST", exec_test)
+register_instruction_impl("CALL", exec_call)
+register_instruction_impl("RET", exec_ret)
+register_instruction_impl("LEAVE", exec_leave)
+register_instruction_impl("LEA", exec_lea)
 
 
 def get_instruction_defs() -> List[InstructionDef]:

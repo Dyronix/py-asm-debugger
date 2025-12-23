@@ -40,7 +40,7 @@ jobs:
 
       - name: Build app
         run: |
-          pyinstaller --noconfirm --clean --name asm-debugger --windowed main.py
+          pyinstaller --noconfirm --clean asm-debugger.spec
 
       - name: Package app (Linux/macOS)
         if: runner.os != 'Windows'

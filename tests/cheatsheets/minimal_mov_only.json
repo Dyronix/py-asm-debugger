@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "MOV Only",
+  "isa": {
+    "arch": "x86",
+    "mode": 32
+  },
+  "syntax": "intel",
+  "toolchain": {
+    "assembler": "gas",
+    "compiler": "gcc"
+  },
+  "instructions": [
+    {
+      "mnemonic": "mov",
+      "summary": "Move",
+      "forms": [
+        {"operands": ["reg32", "imm32"]}
+      ]
+    }
+  ]
+}

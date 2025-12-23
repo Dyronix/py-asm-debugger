@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "name": "GCC Intel x86-32 Minimal",
+  "description": "Minimal Intel-syntax x86-32 instruction set for bundled examples.",
+  "isa": {
+    "arch": "x86",
+    "mode": 32,
+    "cpu_levels": ["i386", "i486", "pentium"]
+  },
+  "syntax": "intel",
+  "toolchain": {
+    "assembler": "gas",
+    "compiler": "gcc",
+    "version_min": "4",
+    "version_max": "13"
+  },
+  "instructions": [
+    {
+      "mnemonic": "mov",
+      "summary": "Move",
+      "description": "Copy data from source to destination.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "imm8"]},
+        {"operands": ["reg32", "reg32"]},
+        {"operands": ["reg32", "mem32"]},
+        {"operands": ["mem32", "reg32"]},
+        {"operands": ["mem32", "imm32"]},
+        {"operands": ["mem32", "imm8"]}
+      ],
+      "examples": ["mov eax, 1", "mov [esp], byte 'H'"]
+    },
+    {
+      "mnemonic": "add",
+      "summary": "Add",
+      "description": "Add source operand to destination.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "reg32"]}
+      ],
+      "examples": ["add eax, 5"]
+    },
+    {
+      "mnemonic": "sub",
+      "summary": "Subtract",
+      "description": "Subtract source operand from destination.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "reg32"]}
+      ]
+    },
+    {
+      "mnemonic": "and",
+      "summary": "Bitwise AND",
+      "description": "Bitwise AND source into destination.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "reg32"]}
+      ]
+    },
+    {
+      "mnemonic": "xor",
+      "summary": "Bitwise XOR",
+      "description": "Bitwise XOR source into destination.",
+      "forms": [
+        {"operands": ["reg32", "reg32"]},
+        {"operands": ["reg32", "imm32"]}
+      ]
+    },
+    {
+      "mnemonic": "cmp",
+      "summary": "Compare",
+      "description": "Compare operands and set flags.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "reg32"]},
+        {"operands": ["mem32", "imm32"]}
+      ]
+    },
+    {
+      "mnemonic": "test",
+      "summary": "Test",
+      "description": "AND operands and update flags.",
+      "forms": [
+        {"operands": ["reg32", "imm32"]},
+        {"operands": ["reg32", "reg32"]}
+      ]
+    },
+    {
+      "mnemonic": "inc",
+      "summary": "Increment",
+      "description": "Increment operand by 1.",
+      "forms": [
+        {"operands": ["reg32"]},
+        {"operands": ["mem8"]}
+      ]
+    },
+    {
+      "mnemonic": "dec",
+      "summary": "Decrement",
+      "description": "Decrement operand by 1.",
+      "forms": [
+        {"operands": ["reg32"]},
+        {"operands": ["mem8"]}
+      ]
+    },
+    {
+      "mnemonic": "push",
+      "summary": "Push",
+      "description": "Push value onto stack.",
+      "forms": [
+        {"operands": ["reg32"]},
+        {"operands": ["imm32"]},
+        {"operands": ["mem32"]}
+      ]
+    },
+    {
+      "mnemonic": "pop",
+      "summary": "Pop",
+      "description": "Pop value from stack into register.",
+      "forms": [
+        {"operands": ["reg32"]}
+      ]
+    },
+    {
+      "mnemonic": "lea",
+      "summary": "Load Effective Address",
+      "description": "Load effective address of memory operand.",
+      "forms": [
+        {"operands": ["reg32", "mem32"]},
+        {"operands": ["reg32", "imm32"]}
+      ]
+    },
+    {
+      "mnemonic": "jmp",
+      "summary": "Jump",
+      "description": "Unconditional jump.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "je",
+      "summary": "Jump Equal",
+      "description": "Jump if zero flag set.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jne",
+      "summary": "Jump Not Equal",
+      "description": "Jump if zero flag clear.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jz",
+      "summary": "Jump Zero",
+      "description": "Jump if zero flag set.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jnz",
+      "summary": "Jump Not Zero",
+      "description": "Jump if zero flag clear.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jle",
+      "summary": "Jump Less or Equal",
+      "description": "Jump if less or equal (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jng",
+      "summary": "Jump Not Greater",
+      "description": "Alias for JLE (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jge",
+      "summary": "Jump Greater or Equal",
+      "description": "Jump if greater or equal (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "jnl",
+      "summary": "Jump Not Less",
+      "description": "Alias for JGE (signed).",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "call",
+      "summary": "Call",
+      "description": "Call a label.",
+      "forms": [
+        {"operands": ["rel32"]}
+      ]
+    },
+    {
+      "mnemonic": "ret",
+      "summary": "Return",
+      "description": "Return from call.",
+      "forms": []
+    },
+    {
+      "mnemonic": "int",
+      "summary": "Interrupt",
+      "description": "Software interrupt.",
+      "forms": [
+        {"operands": ["imm8"]},
+        {"operands": ["imm32"]}
+      ]
+    },
+    {
+      "mnemonic": "nop",
+      "summary": "No Operation",
+      "description": "Do nothing.",
+      "forms": []
+    },
+    {
+      "mnemonic": "hlt",
+      "summary": "Halt",
+      "description": "Stop execution.",
+      "forms": []
+    }
+  ]
+}

@@ -85,7 +85,7 @@ def _parse_char_literal(raw: str) -> int | None:
     return None
 
 
-def _parse_operand(token: str) -> Operand:
+def _parse_operand_intel(token: str) -> Operand:
     raw = token.strip()
     upper = raw.upper()
     if raw.startswith("<") and raw.endswith(">"):
@@ -157,6 +157,37 @@ def _parse_operand(token: str) -> Operand:
     if re.fullmatch(r"[A-Za-z_.$@][A-Za-z0-9_.$@]*", raw):
         return Operand(type="label", value=raw, text=raw, size=size)
     return Operand(type="unsupported", value=raw, text=raw, size=size)
+
+
+def _parse_operand_att(token: str) -> Operand:
+    raw = token.strip()
+    if not raw:
+        return Operand(type="unsupported", value=raw, text=raw)
+    size = None
+    if raw.startswith("$"):
+        return _parse_operand_intel(raw[1:].strip())
+    if raw.startswith("%"):
+        return _parse_operand_intel(raw[1:].strip())
+    if "(" in raw and raw.endswith(")"):
+        before, after = raw.split("(", 1)
+        base_part = after[:-1].strip()
+        base_tokens = base_part.split(",", 1)
+        base_raw = base_tokens[0].strip()
+        if base_raw.startswith("%"):
+            base_raw = base_raw[1:].strip()
+        base_upper = base_raw.upper()
+        base: str | int = base_upper if base_upper in REGISTER_NAMES else base_raw
+        disp_text = before.strip()
+        offset = 0
+        if disp_text:
+            if re.fullmatch(r"0x[0-9A-Fa-f]+", disp_text):
+                offset = int(disp_text, 16)
+            elif re.fullmatch(r"-?\d+", disp_text):
+                offset = int(disp_text, 10)
+            else:
+                return Operand(type="unsupported", value=raw, text=raw, size=size)
+        return Operand(type="mem", value=(base, offset), text=raw, size=size)
+    return _parse_operand_intel(raw)
 
 
 def _split_args(text: str) -> List[str]:
@@ -233,7 +264,7 @@ def _parse_data_bytes(data_text: str, size: int, line_no: int, raw_line: str) ->
     return bytes(data)
 
 
-def parse_assembly(text: str) -> Program:
+def parse_assembly(text: str, syntax: str = "intel") -> Program:
     instructions: List[Instruction] = []
     labels: dict[str, int] = {}
     externs: set[str] = set()
@@ -302,7 +333,10 @@ def parse_assembly(text: str) -> Program:
         parts = working.split(None, 1)
         if not parts:
             continue
-        mnemonic = parts[0].upper()
+        mnemonic = parts[0]
+        if syntax == "att" and len(mnemonic) > 1 and mnemonic[-1].lower() in {"b", "w", "l"}:
+            mnemonic = mnemonic[:-1]
+        mnemonic = mnemonic.upper()
         stripped_mnemonic = mnemonic[1:] if mnemonic.startswith(".") else mnemonic
         if stripped_mnemonic in {"EXTERN", "GLOBAL"}:
             if stripped_mnemonic == "EXTERN" and len(parts) > 1:
@@ -350,7 +384,10 @@ def parse_assembly(text: str) -> Program:
         if len(parts) > 1:
             operand_text = parts[1]
             raw_operands = _split_args(operand_text)
-            operands = [_parse_operand(op) for op in raw_operands if op.strip()]
+            parse_operand = _parse_operand_att if syntax == "att" else _parse_operand_intel
+            operands = [parse_operand(op) for op in raw_operands if op.strip()]
+            if syntax == "att" and len(operands) == 2:
+                operands = [operands[1], operands[0]]
         instruction = Instruction(
             line_no=idx,
             text=raw_line.rstrip("\n"),
