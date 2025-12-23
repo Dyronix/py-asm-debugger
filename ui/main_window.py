@@ -682,6 +682,9 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         self.file_menu.addAction(save_as_action)
 
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        self.file_menu.addAction(exit_action)
 
         toggle_bp_action = QAction("Toggle Breakpoint", self)
         toggle_bp_action.triggered.connect(self.toggle_breakpoint_at_cursor)
