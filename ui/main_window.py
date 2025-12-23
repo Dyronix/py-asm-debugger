@@ -1979,6 +1979,8 @@ class MainWindow(QMainWindow):
             # Memory table has only one extra column: ASCII at index 2
             self.memory_table.setColumnHidden(2, not visible)
             self._update_memory_column_modes(ascii_visible=visible)
+        # Refresh all views so newly visible columns are immediately populated
+        self._update_views()
 
     def _update_memory_column_modes(self, ascii_visible: bool) -> None:
         if not hasattr(self, "memory_table"):
