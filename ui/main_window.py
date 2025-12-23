@@ -1194,6 +1194,7 @@ class MainWindow(QMainWindow):
             with open(self._config_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except OSError:
+            # Silently ignore file write errors; layout state is non-critical
             pass
 
     def _load_breakpoints(self) -> None:
@@ -1205,6 +1206,7 @@ class MainWindow(QMainWindow):
                 data = json.load(f)
             self.breakpoint_manager.load_json(data)
         except (OSError, ValueError, json.JSONDecodeError):
+            # Silently ignore file read/parse errors; app will start with no breakpoints
             pass
 
     def _save_breakpoints(self) -> None:
@@ -1212,6 +1214,7 @@ class MainWindow(QMainWindow):
             with open(self._breakpoints_path(), "w", encoding="utf-8") as f:
                 json.dump(self.breakpoint_manager.to_json(), f, indent=2)
         except OSError:
+            # Silently ignore file write errors; breakpoint state is non-critical
             pass
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
