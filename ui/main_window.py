@@ -51,6 +51,7 @@ from PyQt6.QtWidgets import (
 
 from core.cpu import CPUState, REGISTER_ORDER, clamp_u32
 from core.emulator import Emulator, StepOutcome
+from core.cheatsheet import CheatSheetError, CheatSheetValidationError, cheat_sheet_manager
 from core.instructions import EmulationError, get_instruction_defs
 from core.model import Program
 from core.parser import ParseError, parse_assembly
@@ -87,6 +88,15 @@ class AsmHighlighter(QSyntaxHighlighter):
 
         self.mnemonics = {d.mnemonic for d in get_instruction_defs()}
         self.registers = {name for name in REGISTER_ORDER}
+        self.syntax = "intel"
+
+    def set_mnemonics(self, mnemonics: set[str]) -> None:
+        self.mnemonics = mnemonics
+        self.rehighlight()
+
+    def set_syntax(self, syntax: str) -> None:
+        self.syntax = syntax
+        self.rehighlight()
 
     def highlightBlock(self, text: str) -> None:
         stripped = text.strip()
@@ -100,13 +110,18 @@ class AsmHighlighter(QSyntaxHighlighter):
 
         parts = text.strip().split(None, 1)
         if parts:
-            mnemonic = parts[0].upper()
+            mnemonic = parts[0]
+            if self.syntax == "att" and len(mnemonic) > 1 and mnemonic[-1].lower() in {"b", "w", "l"}:
+                mnemonic = mnemonic[:-1]
+            mnemonic = mnemonic.upper()
             if mnemonic in self.mnemonics:
                 start = text.upper().find(mnemonic)
                 self.setFormat(start, len(mnemonic), self.mnemonic_format)
 
         tokens = [tok.strip(" ,") for tok in text.replace(",", " ").split()]
         for tok in tokens:
+            if self.syntax == "att" and tok.startswith("%"):
+                tok = tok[1:]
             upper = tok.upper()
             if upper in {"BYTE", "WORD", "DWORD", "QWORD", "PTR"}:
                 start = text.upper().find(upper)
@@ -114,7 +129,8 @@ class AsmHighlighter(QSyntaxHighlighter):
             if upper in self.registers:
                 start = text.upper().find(upper)
                 self.setFormat(start, len(tok), self.register_format)
-            if tok.startswith("0x") or tok.lstrip("-").isdigit():
+            number_token = tok[1:] if self.syntax == "att" and tok.startswith("$") else tok
+            if number_token.startswith("0x") or number_token.lstrip("-").isdigit():
                 start = text.find(tok)
                 self.setFormat(start, len(tok), self.number_format)
 
@@ -301,6 +317,7 @@ class MainWindow(QMainWindow):
         self._collapse_left_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
         self._collapse_right_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowLeft)
         self._collapse_bottom_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
+        self._reload_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_step)
@@ -311,6 +328,8 @@ class MainWindow(QMainWindow):
         self._update_status()
         self._load_layout()
         self._load_breakpoints()
+        cheat_sheet_manager.on_change(self._on_cheat_sheet_changed)
+        self._on_cheat_sheet_changed(cheat_sheet_manager.active_sheet)
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
 
     def _resolve_entry_point(self) -> int | None:
@@ -682,6 +701,14 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_file_as)
         self.file_menu.addAction(save_as_action)
 
+        load_cheat_sheet_action = QAction("Load Cheat Sheet...", self)
+        load_cheat_sheet_action.triggered.connect(self.load_cheat_sheet)
+        self.file_menu.addAction(load_cheat_sheet_action)
+
+        reload_cheat_sheet_action = QAction("Reload Cheat Sheet", self)
+        reload_cheat_sheet_action.triggered.connect(self.reload_cheat_sheet)
+        self.file_menu.addAction(reload_cheat_sheet_action)
+
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         self.file_menu.addAction(exit_action)
@@ -703,6 +730,15 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(8, 8, 8, 8)
 
         left_header = self._build_panel_header("Cheat Sheets", left_panel)
+        left_header_layout = left_header.layout()
+        if left_header_layout is not None:
+            reload_button = QToolButton()
+            reload_button.setAutoRaise(True)
+            reload_button.setIcon(self._reload_icon)
+            reload_button.setToolTip("Reload cheat sheet")
+            reload_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            reload_button.clicked.connect(self.reload_cheat_sheet)
+            left_header_layout.insertWidget(max(0, left_header_layout.count() - 2), reload_button)
         left_layout.addWidget(left_header)
 
         left_collapse = self._build_panel_collapse_button("Cheat Sheets", left_panel, self._collapse_left_icon)
@@ -1280,10 +1316,19 @@ class MainWindow(QMainWindow):
         self.cheat_table.setRowCount(len(defs))
         for row, defn in enumerate(defs):
             self.cheat_table.setItem(row, 0, QTableWidgetItem(defn.mnemonic))
-            self.cheat_table.setItem(row, 1, QTableWidgetItem(defn.meaning))
+            self.cheat_table.setItem(row, 1, QTableWidgetItem(defn.summary))
             self.cheat_table.setItem(row, 2, QTableWidgetItem(defn.description))
             self.cheat_table.setItem(row, 3, QTableWidgetItem(defn.syntax))
             self.cheat_table.setItem(row, 4, QTableWidgetItem(defn.flags))
+
+    def _on_cheat_sheet_changed(self, sheet) -> None:
+        self._populate_cheat_sheet()
+        mnemonics = {d.mnemonic for d in get_instruction_defs()}
+        self.highlighter.set_mnemonics(mnemonics)
+        self.highlighter.set_syntax(cheat_sheet_manager.active_syntax())
+        self.source_dirty = True
+        if sheet:
+            self.log(f"Cheat sheet loaded: {sheet.name}")
 
     def filter_cheat_sheet(self, text: str) -> None:
         query = text.strip().lower()
@@ -1535,6 +1580,28 @@ class MainWindow(QMainWindow):
             return
         self._open_file_path(path)
 
+    def load_cheat_sheet(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Cheat Sheet",
+            "",
+            "Cheat Sheet JSON (*.json);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            cheat_sheet_manager.load_from_path(path)
+        except CheatSheetError as exc:
+            QMessageBox.warning(self, "Cheat Sheet Load Failed", exc.message)
+            self.log(f"Cheat sheet load failed: {exc.message}")
+
+    def reload_cheat_sheet(self) -> None:
+        try:
+            cheat_sheet_manager.reload()
+        except CheatSheetError as exc:
+            QMessageBox.warning(self, "Cheat Sheet Reload Failed", exc.message)
+            self.log(f"Cheat sheet reload failed: {exc.message}")
+
     def save_file(self) -> None:
         if not self.current_file:
             self.save_file_as()
@@ -1557,10 +1624,16 @@ class MainWindow(QMainWindow):
 
     def parse_current_program(self) -> bool:
         try:
-            program = parse_assembly(self.editor.toPlainText())
+            program = parse_assembly(self.editor.toPlainText(), cheat_sheet_manager.active_syntax())
+            cheat_sheet_manager.validate_program(program)
         except ParseError as exc:
             self.set_state("Error")
             self.log(f"Parse error (line {exc.line_no}): {exc.message}")
+            self.log(f"  {exc.text}")
+            return False
+        except CheatSheetValidationError as exc:
+            self.set_state("Error")
+            self.log(f"Validation error (line {exc.line_no}): {exc.message}")
             self.log(f"  {exc.text}")
             return False
 
