@@ -1822,6 +1822,10 @@ class MainWindow(QMainWindow):
                 change_bg = QColor("#ffb86c")
                 value_item.setBackground(change_bg)
                 value_item.setForeground(QColor("#1a1b26"))
+                dec_item.setBackground(change_bg)
+                dec_item.setForeground(QColor("#1a1b26"))
+                ascii_item.setBackground(change_bg)
+                ascii_item.setForeground(QColor("#1a1b26"))
         self.prev_stack_values = {clamp_u32(base + i * 4): self.cpu.read_mem(clamp_u32(base + i * 4), 4) for i in range(rows)}
 
     def _populate_symbols(self) -> None:
