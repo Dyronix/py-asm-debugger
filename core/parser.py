@@ -182,7 +182,7 @@ def _parse_operand_att(token: str) -> Operand:
         if disp_text:
             if re.fullmatch(r"0x[0-9A-Fa-f]+", disp_text):
                 offset = int(disp_text, 16)
-            elif re.fullmatch(r"-?\\d+", disp_text):
+            elif re.fullmatch(r"-?\d+", disp_text):
                 offset = int(disp_text, 10)
             else:
                 return Operand(type="unsupported", value=raw, text=raw, size=size)
