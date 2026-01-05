@@ -52,6 +52,7 @@ if sys.platform == "darwin":
     )
     coll = COLLECT(
         app,
+        exe,
         a.binaries,
         a.zipfiles,
         a.datas,
