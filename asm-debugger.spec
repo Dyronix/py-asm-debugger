@@ -44,14 +44,7 @@ exe = EXE(
 )
 
 if sys.platform == "darwin":
-    app = BUNDLE(
-        exe,
-        name="asm-debugger.app",
-        icon=None,
-        bundle_identifier=None,
-    )
     coll = COLLECT(
-        app,
         exe,
         a.binaries,
         a.zipfiles,
@@ -60,6 +53,12 @@ if sys.platform == "darwin":
         upx=True,
         upx_exclude=[],
         name="asm-debugger",
+    )
+    app = BUNDLE(
+        coll,
+        name="asm-debugger.app",
+        icon=None,
+        bundle_identifier=None,
     )
 else:
     coll = COLLECT(
